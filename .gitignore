@@ -178,4 +178,21 @@ cython_debug/
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
+<<<<<<< Updated upstream
 .cursorindexingignore
+=======
+.cursorindexingignore
+
+.bat
+
+# Local runtime and cache artifacts
+data/
+storage/
+
+# Local virtual environments
+venv310/
+venv_new/
+
+# Copilot/agent skills
+.github/skills/
+>>>>>>> Stashed changes

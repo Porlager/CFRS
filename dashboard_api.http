@@ -1,0 +1,56 @@
+@baseUrl = http://127.0.0.1:5000
+
+### Health
+GET {{baseUrl}}/health
+
+### Ingest AI Result (used by stream_main.py sender)
+POST {{baseUrl}}/api/result
+Content-Type: application/json
+
+{
+  "timestamp": "2026-03-26T17:30:00",
+  "person_count": 3,
+  "students": [
+    {
+      "track_id": 1,
+      "name": "SOMCHAI JAIDEE",
+      "state": "ตั้งใจเรียน",
+      "confirmed": true,
+      "confidence": 98.1
+    },
+    {
+      "track_id": 2,
+      "name": "SUDAPORN DEEDEE",
+      "state": "หลับ/เหม่อ",
+      "confirmed": true,
+      "confidence": 92.4
+    },
+    {
+      "track_id": 3,
+      "name": "คนแปลกหน้า",
+      "state": "ฟุบหลับ/หันหลัง",
+      "confirmed": false,
+      "confidence": 0.0
+    }
+  ]
+}
+
+### Auto-save attendance (manual trigger)
+POST {{baseUrl}}/api/attendance/auto-save
+Content-Type: application/json
+
+{
+  "full_name": "SOMCHAI JAIDEE",
+  "timestamp": "2026-03-26T17:30:00",
+  "confidence": 97.2,
+  "track_id": 11
+}
+
+### List students
+GET {{baseUrl}}/api/students?limit=200
+
+### Today report (example: today drowsy count)
+GET {{baseUrl}}/api/reports/today
+
+### Behavior report by date range
+GET {{baseUrl}}/api/reports/behavior?start_date=2026-03-26&end_date=2026-03-26

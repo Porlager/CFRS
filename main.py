@@ -6,6 +6,14 @@ import time
 import numpy as np
 import threading
 from datetime import datetime
+<<<<<<< Updated upstream
+=======
+from ultralytics import YOLO
+import mediapipe as mp
+from scipy.spatial import distance as scipy_dist
+from PIL import ImageFont, ImageDraw, Image
+from face_storage import FaceStorageManager
+>>>>>>> Stashed changes
 
 class ClassroomFacialRecognitionService:
 
@@ -21,7 +29,52 @@ class ClassroomFacialRecognitionService:
         self.BLUR_MAX_THRESH = 60.0
         self.BLUR_FACE_RATIO = 800.0
 
+<<<<<<< Updated upstream
         self._load_and_encode_database()
+=======
+        print(f"[{datetime.now()}] INFO: Booting Counting Service (YOLOv8n)...")
+        self.yolo_model = YOLO("yolov8n.pt")  
+        self.person_count = 0
+        self.last_yolo_boxes = []
+        self.yolo_skip_frames = 10
+        self.frame_counter = 0
+
+        print(f"[{datetime.now()}] INFO: Booting Behavior Service (MediaPipe Tasks)...")
+        model_path = 'face_landmarker.task'
+        if not os.path.exists(model_path):
+            import urllib.request
+            print(f"[{datetime.now()}] WARN: Downloading MediaPipe Face Landmarker model...")
+            urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", model_path)
+            
+        base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
+        options = mp.tasks.vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            num_faces=10,
+            min_face_detection_confidence=0.6,
+            min_face_presence_confidence=0.6,
+            output_facial_transformation_matrixes=True
+        )
+        self.face_landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+
+        self.EAR_THRESH = 0.18
+        self.LEFT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
+        self.RIGHT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
+
+        self.face_recognizer = None
+        if hasattr(cv2, "face") and hasattr(cv2.face, "LBPHFaceRecognizer_create"):
+            self.face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+        else:
+            print(f"[{datetime.now()}] WARN: cv2.face not available. Install opencv-contrib-python for LBPH identity.")
+        self.label_to_name = {}
+        self.name_to_label = {}
+        self.is_lbph_trained = False
+        self.face_storage = FaceStorageManager(storage_root='storage/faces', target_size=(200, 200))
+        self._load_and_train_database()
+
+    def _load_and_train_database(self):
+        if self.face_recognizer is None:
+            return
+>>>>>>> Stashed changes
 
     def _load_and_encode_database(self):
         """Indexing ด้วย num_jitters=5 พร้อม Error Handling"""
@@ -31,6 +84,14 @@ class ClassroomFacialRecognitionService:
             print(f"[{datetime.now()}] WARN: Directory created. Please add images to '{self.path}'.")
             return
 
+<<<<<<< Updated upstream
+=======
+        faces = []
+        labels = []
+        current_id = 0
+        cached_faces = 0
+
+>>>>>>> Stashed changes
         for filename in os.listdir(self.path):
             if not filename.lower().endswith(('.png', '.jpg', '.jpeg')): continue
 
@@ -38,10 +99,32 @@ class ClassroomFacialRecognitionService:
             img_path = os.path.join(self.path, filename)
 
             try:
+<<<<<<< Updated upstream
                 img = cv2.imread(img_path)
                 if img is None:
                     print(f"[{datetime.now()}] WARN: Cannot read {filename}. Skipping...")
                     continue
+=======
+                face_crop = self.face_storage.get_or_create_face_crop(
+                    img_path=img_path,
+                    person_name=name,
+                    face_landmarker=self.face_landmarker,
+                )
+                if face_crop is not None and face_crop.size > 0:
+                    faces.append(face_crop)
+                    labels.append(label_id)
+                    cached_faces += 1
+            except Exception as e:
+                print(f"[{datetime.now()}] WARN: Failed to load {img_path}: {e}")
+
+        self.face_storage.flush()
+        if cached_faces > 0:
+            print(f"[{datetime.now()}] INFO: Face storage cache ready ({cached_faces} samples).")
+                
+        if len(faces) > 0:
+            self.face_recognizer.train(faces, np.array(labels))
+            self.is_lbph_trained = True
+>>>>>>> Stashed changes
 
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 encodings = face_recognition.face_encodings(rgb_img, num_jitters=5)

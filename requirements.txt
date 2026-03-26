@@ -1,0 +1,8 @@
+numpy
+opencv-contrib-python
+ultralytics
+mediapipe
+scipy
+pillow
+requests
+flask
