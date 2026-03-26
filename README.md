@@ -1,157 +1,106 @@
-# Classroom Facial Recognition System
+# Classroom Monitoring System
 
-A real-time facial recognition service designed for classroom attendance tracking. Built with dynamic thresholding, pose-aware matching, and a centroid-based tracker that prevents duplicate check-ins.
+Real-time classroom monitoring with three pipelines running on one laptop:
 
----
+- Identity: OpenCV LBPH face recognizer
+- Behavior: MediaPipe Face Landmarker + EAR + head pose
+- Counting: YOLOv8n person detection with frame skipping for CPU stability
 
-## Features
+## What This Version Fixes
 
-- **Dynamic Threshold** — recognition confidence threshold scales smoothly with face size (near vs. far from camera)
-- **Pose Penalty** — reduces threshold when a face is turned sideways, reducing false positives
-- **Weighted Distance Matching** — uses a weighted average of the two closest database encodings instead of raw minimum, guarding against outlier images
-- **Margin Check** — requires a clear gap between the best and second-best match before confirming identity
-- **Dynamic Blur Detection** — Laplacian variance test with a threshold that adapts to face width
-- **Centroid Tracker + Confirmation Timer** — a face must be consistently present for 5 seconds before being marked _Verified_
-- **`confirmed_names_db` set** — each person is logged to the database only once per session, even if they re-enter the frame
-- **Thread-safe tracker** — `threading.Lock` guards shared state, ready for multi-threaded extension
-- **Batch Landmark Extraction** — all face landmarks are computed once per frame, not per face
-
----
-
-## Key_Option
-
-Prioritize all tasks thoroughly and review available processes optimizing logistics
-
----
+- Drowsy status now requires sustained bad behavior duration (not single-frame trigger)
+- Tracker uses one-to-one assignment per frame to reduce ID collisions
+- Runtime failures in training/inference are logged instead of silently ignored
+- Portable launcher script (`run.bat`) works across different machines
 
 ## Project Structure
 
 ```
-classroom-facial-recognition/
-│
-├── main.py                  # Entry point — capture loop + tracker logic
-│
-├── known_faces/             # Reference images for enrolled students
-│   ├── alice_01.jpg         # Filename format: NAME_anything.jpg
-│   ├── alice_02.jpg         # Multiple photos per person are supported
-│   └── bob_01.png
-│
-├── logs/                    # (Optional) Attendance or event logs
-├── data/                    # (Optional) Cached encodings or exports
-│
+CFRS/
+├── main.py
+├── run.bat
+├── README.md
 ├── requirements.txt
-├── .gitattributes
-└── README.md
+├── face_landmarker.task
+├── yolov8n.pt
+└── known_faces/
 ```
-
-> **Naming convention for `known_faces/`:** the part before the first `_` becomes the identity label (uppercased). So `alice_01.jpg` → `ALICE`, `john_smith_02.png` → `JOHN`.
-
----
 
 ## Requirements
 
-- Python 3.8+
-- A webcam (OpenCV-compatible)
-- CMake + a C++ compiler (required by `dlib`, which backs `face_recognition`)
+- Python 3.10+ recommended
+- Webcam
+- Windows/Linux/macOS
 
-Install Python dependencies:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Minimal `requirements.txt`:
+Important:
 
-```
-face_recognition
-opencv-python
-numpy
-```
-
-### macOS (Apple Silicon)
-
-```bash
-brew install cmake
-pip install face_recognition opencv-python numpy
-```
-
-### Ubuntu / Debian
-
-```bash
-sudo apt-get install build-essential cmake libopenblas-dev liblapack-dev
-pip install face_recognition opencv-python numpy
-```
-
----
+- This project uses `cv2.face.LBPHFaceRecognizer_create`, so you must install `opencv-contrib-python`.
+- If you only install `opencv-python`, identity recognition will be disabled.
 
 ## Quick Start
 
-1. **Add reference photos** to `known_faces/` using the naming convention above. More photos per person = better accuracy.
+1. Add student images to `known_faces/`.
+2. Use file naming format `NAME_xxx.jpg` or `NAME_xxx.png`.
+3. Run:
 
-2. **Run the system:**
+```bash
+run.bat
+```
+
+or
 
 ```bash
 python main.py
 ```
 
-3. **On-screen colours:**
+Press `q` to quit.
 
-| Colour | Meaning                                             |
-| ------ | --------------------------------------------------- |
-| Yellow | Face detected, verifying identity (countdown shown) |
-| Green  | Identity confirmed (_Verified_)                     |
-| Red    | Unknown face                                        |
-| Orange | Moving or blurry — skipped                          |
+## Core Runtime Logic
 
-4. **Press `q`** to quit.
+### 1) Behavior Classification
 
----
+- EAR from eye landmarks checks eye closure.
+- Head pose (pitch/yaw/roll) checks looking-away posture.
+- Track is marked drowsy only after sustained duration (`DROWSY_HOLD_TIME`).
 
-## Configuration
+### 2) Identity
 
-All tunable parameters live at the top of `ClassroomFacialRecognitionService.__init__` and in the `__main__` block:
+- LBPH is trained from `known_faces/` at startup.
+- If LBPH is unavailable or not trained, system keeps running in detection-only mode.
 
-| Parameter           | Default  | Description                                          |
-| ------------------- | -------- | ---------------------------------------------------- |
-| `CONFIRMATION_TIME` | `5.0` s  | Seconds a face must be stable before confirmation    |
-| `TIMEOUT`           | `10.0` s | Seconds before a lost track is discarded             |
-| `MAX_DISTANCE`      | `50` px  | Max centroid movement to re-link a track             |
-| `MIN_CONFIDENCE`    | `60.0` % | Minimum sigmoid confidence to accept a match         |
-| `WEIGHT_BEST`       | `0.7`    | Weight for the closest encoding in weighted distance |
-| `WEIGHT_SECOND`     | `0.3`    | Weight for the second-closest encoding               |
-| `CONFIDENCE_K`      | `12`     | Steepness of the sigmoid confidence curve            |
+### 3) People Counting
 
----
+- YOLOv8n runs every N frames (`yolo_skip_frames`) to reduce CPU usage.
+- Last detection result is reused between YOLO runs for smooth display.
 
-## Architecture
+## Main Tunables (in `main.py`)
 
-```
-Camera Frame
-     │
-     ▼
-process_frame()
-  ├─ Resize + HOG face detection
-  ├─ Batch: face encodings (num_jitters=2)
-  ├─ Batch: face landmarks → pose penalty
-  ├─ Dynamic blur check (per face)
-  ├─ Dynamic threshold + margin (per face)
-  └─ Weighted distance → identity decision
-           │
-           ▼
-     Centroid Tracker  (main loop)
-  ├─ Match detection → existing track (Euclidean distance)
-  ├─ Create new track if unmatched
-  ├─ Confirmation timer (5 s)
-  └─ confirmed_names_db → one-time DB log per identity
-```
+- `CONFIRMATION_TIME`: time before name is marked confirmed
+- `TIMEOUT`: tracker remove timeout
+- `MAX_DISTANCE`: centroid matching threshold
+- `DROWSY_HOLD_TIME`: sustained bad behavior duration before drowsy
+- `EAR_THRESH`: eye-closure sensitivity
+- `yolo_skip_frames`: YOLO inference interval
 
----
+## Troubleshooting
 
-## Known Limitations
+- `AttributeError: module 'cv2' has no attribute 'face'`
+  - Install: `pip install opencv-contrib-python`
 
-- **HOG model** is used for speed; swap to `model="cnn"` in `face_locations()` for better accuracy on GPU.
-- **Re-entry across sessions** — `confirmed_names_db` is in-memory only; it resets when the script restarts.
-- **Centroid tracker** is position-only; fast lateral movement can break track continuity.
-- **`resize_scale=1`** (default) processes full-resolution frames. Pass `0.5` for a significant FPS boost on high-resolution cameras.
+- `face_landmarker.task` missing
+  - System auto-downloads on first run if internet is available.
 
----
+- Low FPS
+  - Increase `yolo_skip_frames`
+  - Reduce camera resolution in your webcam settings
+
+## Notes
+
+- Thai text is rendered via Pillow for reliable on-frame Thai display.
+- This is a real-time heuristic system; tune thresholds for your classroom camera angle.

@@ -69,13 +69,20 @@ class ClassroomMonitoringSystem:
         self.LEFT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
         self.RIGHT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
 
-        self.face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+        self.face_recognizer = None
+        if hasattr(cv2, "face") and hasattr(cv2.face, "LBPHFaceRecognizer_create"):
+            self.face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+        else:
+            print(f"[{datetime.now()}] WARN: cv2.face not available. Install opencv-contrib-python for LBPH identity.")
         self.label_to_name = {}
         self.name_to_label = {}
         self.is_lbph_trained = False
         self._load_and_train_database()
 
     def _load_and_train_database(self):
+        if self.face_recognizer is None:
+            return
+
         if not os.path.exists(self.path):
             os.makedirs(self.path)
             return
@@ -121,7 +128,7 @@ class ClassroomMonitoringSystem:
                         faces.append(face_crop)
                         labels.append(label_id)
             except Exception as e:
-                pass
+                print(f"[{datetime.now()}] WARN: Failed to load {img_path}: {e}")
                 
         if len(faces) > 0:
             self.face_recognizer.train(faces, np.array(labels))
@@ -188,7 +195,7 @@ class ClassroomMonitoringSystem:
                     self.last_yolo_boxes = []
                 self.person_count = len(self.last_yolo_boxes)
             except Exception as e:
-                pass
+                print(f"[{datetime.now()}] WARN: YOLO inference failed: {e}")
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -245,7 +252,7 @@ class ClassroomMonitoringSystem:
                     })
                     continue
 
-                if not self.is_lbph_trained:
+                if self.face_recognizer is None or not self.is_lbph_trained:
                     detections.append({
                         "Name": "คนแปลกหน้า", "Confidence": 0.0, "BoundingBox": bbox, "State": behavior["state"], "debug_text": behavior["debug_text"]
                     })
@@ -311,9 +318,10 @@ if __name__ == "__main__":
     confirmed_names_db = set()
     tracker_lock = threading.Lock()
 
-    CONFIRMATION_TIME = 1.0
-    TIMEOUT = 1.0
+    CONFIRMATION_TIME = 1.2
+    TIMEOUT = 2.0
     MAX_DISTANCE = 100
+    DROWSY_HOLD_TIME = 1.5
 
     while True:
         ret, frame = cap.read()
@@ -326,11 +334,12 @@ if __name__ == "__main__":
             keys_to_delete = [k for k, v in tracked_faces.items() if current_time - v["last_seen"] > TIMEOUT]
             for k in keys_to_delete: del tracked_faces[k]
 
+            used_track_ids = set()
             for res in results:
                 bb = res["BoundingBox"]
                 ai_name = res["Name"]
                 conf = res["Confidence"]
-                state = res["State"]
+                raw_state = res["State"]
                 
                 cx = (bb["Left"] + bb["Right"]) // 2
                 cy = (bb["Top"] + bb["Bottom"]) // 2
@@ -339,27 +348,52 @@ if __name__ == "__main__":
                 min_dist = MAX_DISTANCE
 
                 for t_id, t_data in tracked_faces.items():
+                    if t_id in used_track_ids:
+                        continue
                     dist_tracked = math.hypot(cx - t_data["centroid"][0], cy - t_data["centroid"][1])
                     if dist_tracked < min_dist:
                         min_dist = dist_tracked
                         best_match_id = t_id
 
                 if best_match_id is None:
+                    is_instant_drowsy = raw_state in ["หลับ/เหม่อ", "ฟุบหลับ/หันหลัง"]
+                    track_state = "ตั้งใจเรียน"
+                    if raw_state == "ฟุบหลับ/หันหลัง":
+                        track_state = "ฟุบหลับ/หันหลัง"
                     tracked_faces[next_track_id] = {
                         "name": ai_name, "centroid": (cx, cy),
                         "first_seen": current_time, "last_seen": current_time,
-                        "confirmed": False, "state": state, 
+                        "confirmed": False,
+                        "state": track_state,
+                        "raw_state": raw_state,
+                        "drowsy_since": current_time if is_instant_drowsy else None,
                         "debug_text": res.get("debug_text", ""),
                         "bbox": bb
                     }
+                    used_track_ids.add(next_track_id)
                     next_track_id += 1
                 else:
+                    used_track_ids.add(best_match_id)
                     t_data = tracked_faces[best_match_id]
                     t_data["centroid"] = (cx, cy)
                     t_data["last_seen"] = current_time
-                    t_data["state"] = state
+                    t_data["raw_state"] = raw_state
                     t_data["debug_text"] = res.get("debug_text", "")
                     t_data["bbox"] = bb
+
+                    if raw_state in ["หลับ/เหม่อ", "ฟุบหลับ/หันหลัง"]:
+                        if t_data.get("drowsy_since") is None:
+                            t_data["drowsy_since"] = current_time
+                    else:
+                        t_data["drowsy_since"] = None
+
+                    if raw_state == "ฟุบหลับ/หันหลัง":
+                        t_data["state"] = "ฟุบหลับ/หันหลัง"
+                    elif t_data.get("drowsy_since") is not None and (current_time - t_data["drowsy_since"] >= DROWSY_HOLD_TIME):
+                        t_data["state"] = "หลับ/เหม่อ"
+                    else:
+                        t_data["state"] = "ตั้งใจเรียน"
+
                     if not t_data["confirmed"] and ai_name not in ["คนแปลกหน้า", "ภาพเบลอ", "ไม่พบใบหน้า"]:
                         t_data["name"] = ai_name
                     
