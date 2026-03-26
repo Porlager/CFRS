@@ -3,7 +3,7 @@ import os
 import re
 from datetime import date, datetime
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 from backend_db import AttendanceRepository
 
@@ -92,7 +92,14 @@ def create_app(test_config=None) -> Flask:
         if not os.path.exists(frame_path):
             return jsonify({"ok": False, "error": "camera_frame_not_ready"}), 404
 
-        response = send_file(frame_path, mimetype="image/jpeg", conditional=False, max_age=0)
+        try:
+            # Read into memory to close file handle immediately and reduce writer lock contention on Windows.
+            with open(frame_path, "rb") as fp:
+                frame_bytes = fp.read()
+        except OSError:
+            return jsonify({"ok": False, "error": "camera_frame_busy"}), 503
+
+        response = Response(frame_bytes, mimetype="image/jpeg")
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"

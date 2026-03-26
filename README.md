@@ -139,6 +139,17 @@ py -3 -m pip install -r requirements.txt
 | Dashboard Only | `./run_dashboard.ps1 -DashboardOnly` | ทดสอบหน้าเว็บ/รายงานโดยไม่เปิดกล้อง |
 | Direct Flask | `py -3 dashboard_api.py` | รัน API ตรงสำหรับ debug |
 
+### ใช้มือถือเป็น IP Camera
+
+รองรับแล้วผ่านตัวแปร `CFRS_CAMERA_SOURCE` โดยใส่ URL จากแอปมือถือ เช่น IP Webcam
+
+```powershell
+$env:CFRS_CAMERA_SOURCE = "http://192.168.1.105:8080/video"
+./run_dashboard.ps1
+```
+
+ถ้าใส่แค่ base URL เช่น `http://192.168.1.105:8080` ระบบจะลองเติม `/video` ให้อัตโนมัติ
+
 ---
 
 ## Register Flow

@@ -8,6 +8,31 @@ import threading
 import requests
 from datetime import datetime
 
+
+def _write_dashboard_frame(frame_output_path, jpeg_bytes):
+    tmp_path = f"{frame_output_path}.tmp"
+
+    for attempt in range(4):
+        try:
+            with open(tmp_path, "wb") as fp:
+                fp.write(jpeg_bytes)
+            os.replace(tmp_path, frame_output_path)
+            return
+        except PermissionError:
+            time.sleep(0.02 * (attempt + 1))
+        except OSError:
+            time.sleep(0.02 * (attempt + 1))
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    # Fallback when replace is blocked by a transient read lock.
+    with open(frame_output_path, "wb") as fp:
+        fp.write(jpeg_bytes)
+
 class ClassroomFacialRecognitionService:
 
     def __init__(self, known_faces_path='known_faces'):
@@ -270,9 +295,48 @@ def bbox_iou(a, b):
     return inter_area / denom
 
 
+def _open_camera_from_env():
+    camera_source_raw = str(os.getenv("CFRS_CAMERA_SOURCE", "0")).strip()
+    if not camera_source_raw:
+        camera_source_raw = "0"
+
+    camera_source_used = camera_source_raw
+    cap = None
+
+    if camera_source_raw.lstrip("-").isdigit():
+        camera_index = int(camera_source_raw)
+        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        camera_source_used = str(camera_index)
+    else:
+        cap = cv2.VideoCapture(camera_source_raw)
+
+        # IP Webcam often serves frames at /video even if user sets only base URL.
+        if (
+            (cap is None or not cap.isOpened())
+            and camera_source_raw.startswith(("http://", "https://"))
+            and not camera_source_raw.rstrip("/").lower().endswith("/video")
+        ):
+            fallback_url = f"{camera_source_raw.rstrip('/')}/video"
+            cap = cv2.VideoCapture(fallback_url)
+            camera_source_used = fallback_url
+
+    if cap is None or not cap.isOpened():
+        raise RuntimeError(
+            f"Cannot open camera source '{camera_source_raw}'. "
+            "Set CFRS_CAMERA_SOURCE=0 for USB webcam or use IP Webcam URL (example: http://PHONE_IP:8080/video)."
+        )
+
+    return cap, camera_source_used
+
+
 if __name__ == "__main__":
     service = ClassroomFacialRecognitionService()
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    try:
+        cap, camera_source_used = _open_camera_from_env()
+        print(f"[{datetime.now()}] INFO: Camera source = {camera_source_used}")
+    except Exception as exc:
+        print(f"[{datetime.now()}] ERROR: {exc}")
+        raise SystemExit(1)
 
     camera_width = int(os.getenv("CFRS_CAMERA_WIDTH", "960"))
     camera_height = int(os.getenv("CFRS_CAMERA_HEIGHT", "540"))
@@ -530,10 +594,7 @@ if __name__ == "__main__":
                     [int(cv2.IMWRITE_JPEG_QUALITY), 78],
                 )
                 if ok:
-                    tmp_path = f"{frame_output_path}.tmp"
-                    with open(tmp_path, "wb") as fp:
-                        fp.write(jpeg.tobytes())
-                    os.replace(tmp_path, frame_output_path)
+                    _write_dashboard_frame(frame_output_path, jpeg.tobytes())
             except Exception as exc:
                 if current_time - last_frame_error_time >= 8:
                     print(f"[{datetime.now()}] WARN: Cannot write camera frame for dashboard: {exc}")
