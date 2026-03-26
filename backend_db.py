@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 UNKNOWN_NAMES = {
@@ -261,6 +261,23 @@ class AttendanceRepository:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_student_by_code(self, student_code: str) -> Optional[Dict[str, Any]]:
+        code = (student_code or "").strip()
+        if not code:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT id, student_code, first_name, last_name, full_name, is_active,
+                       created_at, updated_at
+                FROM students
+                WHERE student_code = ?
+                LIMIT 1
+                """,
+                (code,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_today_report(self) -> Dict[str, Any]:
         today = datetime.now().date().isoformat()
 
@@ -337,6 +354,177 @@ class AttendanceRepository:
             "end_date": end_date,
             "state_counts": [dict(r) for r in rows],
             "drowsy_unique_students": int(drowsy_unique),
+        }
+
+    def get_dashboard_summary(self, days: int = 7, recent_limit: int = 12) -> Dict[str, Any]:
+        days = max(1, min(int(days), 30))
+        recent_limit = max(1, min(int(recent_limit), 50))
+
+        today_date = datetime.now().date()
+        today = today_date.isoformat()
+        start_date = (today_date - timedelta(days=days - 1)).isoformat()
+
+        with self._lock:
+            total_active_students = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM students WHERE is_active = 1",
+                ).fetchone()["c"]
+            )
+
+            attendance_today = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM attendance_logs WHERE attendance_date = ?",
+                    (today,),
+                ).fetchone()["c"]
+            )
+
+            drowsy_students_today = int(
+                self._conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT student_id) AS c
+                    FROM behavior_status_logs
+                    WHERE date(event_time) = ? AND is_drowsy = 1 AND student_id IS NOT NULL
+                    """,
+                    (today,),
+                ).fetchone()["c"]
+            )
+
+            behavior_events_today = int(
+                self._conn.execute(
+                    "SELECT COUNT(*) AS c FROM behavior_status_logs WHERE date(event_time) = ?",
+                    (today,),
+                ).fetchone()["c"]
+            )
+
+            unknown_today = int(
+                self._conn.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM behavior_status_logs
+                    WHERE date(event_time) = ? AND student_id IS NULL
+                    """,
+                    (today,),
+                ).fetchone()["c"]
+            )
+
+            recent_attendance = [
+                dict(r)
+                for r in self._conn.execute(
+                    """
+                    SELECT s.full_name, a.first_seen_at, a.confidence
+                    FROM attendance_logs a
+                    JOIN students s ON s.id = a.student_id
+                    ORDER BY a.first_seen_at DESC
+                    LIMIT ?
+                    """,
+                    (recent_limit,),
+                ).fetchall()
+            ]
+
+            attendance_today_list = [
+                dict(r)
+                for r in self._conn.execute(
+                    """
+                    SELECT s.full_name, a.first_seen_at, a.confidence
+                    FROM attendance_logs a
+                    JOIN students s ON s.id = a.student_id
+                    WHERE a.attendance_date = ?
+                    ORDER BY a.first_seen_at DESC
+                    LIMIT ?
+                    """,
+                    (today, max(recent_limit, 30)),
+                ).fetchall()
+            ]
+
+            state_distribution = [
+                dict(r)
+                for r in self._conn.execute(
+                    """
+                    SELECT state, COUNT(*) AS total
+                    FROM behavior_status_logs
+                    WHERE date(event_time) = ?
+                    GROUP BY state
+                    ORDER BY total DESC
+                    LIMIT 8
+                    """,
+                    (today,),
+                ).fetchall()
+            ]
+
+            drowsy_rank = [
+                dict(r)
+                for r in self._conn.execute(
+                    """
+                    SELECT s.full_name, COUNT(*) AS drowsy_count, MAX(b.event_time) AS last_seen
+                    FROM behavior_status_logs b
+                    JOIN students s ON s.id = b.student_id
+                    WHERE date(b.event_time) BETWEEN ? AND ?
+                      AND b.is_drowsy = 1
+                    GROUP BY s.full_name
+                    ORDER BY drowsy_count DESC, last_seen DESC
+                    LIMIT 8
+                    """,
+                    (start_date, today),
+                ).fetchall()
+            ]
+
+            attendance_rows = self._conn.execute(
+                """
+                SELECT attendance_date, COUNT(*) AS total
+                FROM attendance_logs
+                WHERE attendance_date BETWEEN ? AND ?
+                GROUP BY attendance_date
+                ORDER BY attendance_date ASC
+                """,
+                (start_date, today),
+            ).fetchall()
+            drowsy_rows = self._conn.execute(
+                """
+                SELECT date(event_time) AS day, COUNT(*) AS total
+                FROM behavior_status_logs
+                WHERE date(event_time) BETWEEN ? AND ? AND is_drowsy = 1
+                GROUP BY day
+                ORDER BY day ASC
+                """,
+                (start_date, today),
+            ).fetchall()
+
+        attendance_map = {r["attendance_date"]: int(r["total"]) for r in attendance_rows}
+        drowsy_map = {r["day"]: int(r["total"]) for r in drowsy_rows}
+
+        latest_checkin = attendance_today_list[0] if attendance_today_list else None
+        attendance_rate_today = 0.0
+        if total_active_students > 0:
+            attendance_rate_today = round((attendance_today / total_active_students) * 100.0, 1)
+
+        trend = []
+        for i in range(days):
+            day = (today_date - timedelta(days=days - 1 - i)).isoformat()
+            trend.append(
+                {
+                    "day": day,
+                    "attendance": attendance_map.get(day, 0),
+                    "drowsy_events": drowsy_map.get(day, 0),
+                }
+            )
+
+        return {
+            "date": today,
+            "window_days": days,
+            "kpis": {
+                "attendance_today": attendance_today,
+                "total_active_students": total_active_students,
+                "attendance_rate_today": attendance_rate_today,
+                "drowsy_students_today": drowsy_students_today,
+                "behavior_events_today": behavior_events_today,
+                "unknown_events_today": unknown_today,
+            },
+            "latest_checkin": latest_checkin,
+            "attendance_today_list": attendance_today_list,
+            "state_distribution": state_distribution,
+            "recent_attendance": recent_attendance,
+            "drowsy_rank": drowsy_rank,
+            "trend": trend,
         }
 
     def close(self) -> None:

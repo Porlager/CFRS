@@ -107,6 +107,70 @@ python main.py
 
 ---
 
+## Dashboard (Flask)
+
+หน้า Dashboard ใหม่รองรับทั้ง Desktop และมือถือ พร้อม API report สำหรับ frontend:
+
+- Dashboard UI: `GET /`
+- Face registration page: `GET /register`
+- Health check: `GET /health`
+- Live camera frame: `GET /api/camera/frame`
+- Ingest AI payload: `POST /api/result`
+- Register new face image: `POST /api/register-face`
+- Dashboard summary: `GET /api/reports/dashboard?days=7`
+- Today report: `GET /api/reports/today`
+- Behavior report: `GET /api/reports/behavior?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
+
+### Run Dashboard
+
+```powershell
+./run_dashboard.ps1
+```
+
+คำสั่งนี้จะเปิดทั้ง:
+- Dashboard API/UI (`http://127.0.0.1:5000`)
+- Camera check-in backend (`main.py`) เพื่อให้มีการเช็คชื่อเข้า Dashboard อัตโนมัติ
+
+> ถ้าหน้าเว็บไม่เห็นภาพกล้อง ให้ตรวจว่าเปิดแบบ full stack (`./run_dashboard.ps1`) ไม่ใช่ dashboard-only
+
+ถ้าต้องการเปิดเฉพาะ dashboard อย่างเดียว:
+
+```powershell
+./run_dashboard.ps1 -DashboardOnly
+```
+
+หรือ
+
+```powershell
+py -3 dashboard_api.py
+```
+
+เปิดที่ `http://127.0.0.1:5000`
+
+### Register Face (Web)
+
+1. เปิด `http://127.0.0.1:5000/register`
+2. กรอกเลขนักศึกษา + ชื่อ แล้วอัปโหลดรูป หรือกดเปิดกล้องและ Capture
+3. กดลงทะเบียน
+
+ระบบจะบันทึกรูปไปที่ `known_faces/` อัตโนมัติ
+
+> ถ้า `main.py` กำลังรันอยู่ ให้รีสตาร์ต backend กล้องหนึ่งครั้งเพื่อโหลดใบหน้าใหม่เข้าโมเดล
+
+### Run E2E Tests
+
+```powershell
+./run_e2e_tests.ps1
+```
+
+หรือ
+
+```powershell
+py -3 -m pytest
+```
+
+---
+
 ## Configuration
 
 All tunable parameters live at the top of `ClassroomFacialRecognitionService.__init__` and in the `__main__` block:
@@ -120,6 +184,13 @@ All tunable parameters live at the top of `ClassroomFacialRecognitionService.__i
 | `WEIGHT_BEST`       | `0.7`    | Weight for the closest encoding in weighted distance |
 | `WEIGHT_SECOND`     | `0.3`    | Weight for the second-closest encoding               |
 | `CONFIDENCE_K`      | `12`     | Steepness of the sigmoid confidence curve            |
+| `CFRS_PROCESS_EVERY_N_FRAMES` | `3` | Run heavy face+state inference every N frames for better FPS |
+| `CFRS_BODY_DETECT_EVERY_N_FRAMES` | `4` | Run body fallback detection every N frames |
+| `CFRS_BODY_RESIZE_SCALE` | `0.4` | Body detection scale for speed/accuracy tradeoff |
+
+### Face Missing But Body Found
+
+ระบบมี body fallback แล้ว: ถ้าหน้าหายชั่วคราวแต่ยังจับตัวได้ ระบบจะพยายามสืบทอดชื่อจาก track เดิม และบันทึกสถานะเป็น `ฟุบหลับ/หันหลัง` ต่อเนื่อง
 
 ---
 

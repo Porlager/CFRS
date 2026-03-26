@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CFRS Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body data-refresh-seconds="{{ refresh_seconds }}">
+  <div class="bg-layer"></div>
+
+  <header class="hero container">
+    <div class="hero-copy">
+      <p class="eyebrow">CFRS LIVE MONITORING</p>
+      <h1>Classroom Dashboard</h1>
+      <p class="subtitle">ติดตามการเข้าเรียนและสถานะพฤติกรรมแบบเรียลไทม์</p>
+    </div>
+    <div class="control-panel">
+      <label for="window-days">ช่วงข้อมูล</label>
+      <select id="window-days" aria-label="เลือกช่วงวัน">
+        <option value="7" selected>7 วัน</option>
+        <option value="14">14 วัน</option>
+        <option value="30">30 วัน</option>
+      </select>
+
+      <label for="attendance-search">ค้นหาชื่อเช็คชื่อ</label>
+      <input id="attendance-search" type="search" placeholder="พิมพ์ชื่อเพื่อกรองตาราง" autocomplete="off">
+
+      <div class="control-actions">
+        <button id="refresh-btn" type="button">Refresh Now</button>
+        <button id="fullscreen-btn" type="button" class="secondary">Full Screen</button>
+      </div>
+      <a href="/register" class="register-link">ลงทะเบียนใบหน้าใหม่</a>
+
+      <p class="hint">Auto refresh ทุก <span id="refresh-sec">{{ refresh_seconds }}</span> วินาที</p>
+      <p class="hint">อัปเดตล่าสุด: <span id="last-updated">-</span></p>
+      <p class="hint">API: <span id="api-status" class="status-pill">Connecting...</span></p>
+    </div>
+  </header>
+
+  <main class="container grid-root">
+    <section class="panel checkin-spotlight">
+      <div class="panel-head">
+        <h2>Live Check-in Board</h2>
+        <span class="muted">หน้าจอเช็คชื่อแบบเรียลไทม์</span>
+      </div>
+      <div class="spotlight-grid">
+        <article class="spotlight-camera">
+          <p class="label">Live Camera</p>
+          <div class="camera-frame-wrap">
+            <img id="camera-frame" src="/api/camera/frame" alt="Live camera preview">
+          </div>
+          <p id="camera-status" class="muted">กำลังเชื่อมต่อภาพกล้อง...</p>
+          <p class="muted">คนในห้อง: <strong id="live-person-count">0</strong></p>
+          <p class="muted">ตั้งใจเรียน: <strong id="live-attentive-count">0</strong> | ไม่ตั้งใจ: <strong id="live-inattentive-count">0</strong> | ง่วง/หลับ: <strong id="live-drowsy-count">0</strong></p>
+          <p class="muted">Unknown: <strong id="live-unknown-count">0</strong></p>
+        </article>
+        <article class="spotlight-card">
+          <p class="label">เช็คชื่อล่าสุด</p>
+          <h3 id="latest-checkin-name">-</h3>
+          <p id="latest-checkin-time" class="muted">-</p>
+          <p id="latest-checkin-confidence" class="muted">Confidence: -</p>
+        </article>
+        <article class="spotlight-feed">
+          <p class="label">เข้าเรียนวันนี้</p>
+          <div id="attendance-chip-list" class="chip-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel kpi-panel">
+      <h2>Key Metrics Today</h2>
+      <div class="kpi-grid">
+        <article class="kpi-card">
+          <p>Attendance</p>
+          <h3 id="kpi-attendance">0</h3>
+        </article>
+        <article class="kpi-card info">
+          <p>Attendance Rate</p>
+          <h3 id="kpi-attendance-rate">0%</h3>
+        </article>
+        <article class="kpi-card info">
+          <p>Active Students</p>
+          <h3 id="kpi-total-active">0</h3>
+        </article>
+        <article class="kpi-card warning">
+          <p>Drowsy Students</p>
+          <h3 id="kpi-drowsy-students">0</h3>
+        </article>
+        <article class="kpi-card danger">
+          <p>Unknown Events</p>
+          <h3 id="kpi-unknown-events">0</h3>
+        </article>
+        <article class="kpi-card">
+          <p>Behavior Events</p>
+          <h3 id="kpi-behavior-events">0</h3>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel trend-panel">
+      <div class="panel-head">
+        <h2>Attendance vs Drowsy Trend</h2>
+        <span id="trend-date-range" class="muted">-</span>
+      </div>
+      <div id="trend-bars" class="trend-bars"></div>
+      <div class="legend">
+        <span><i class="dot attendance"></i>Attendance</span>
+        <span><i class="dot drowsy"></i>Drowsy Events</span>
+      </div>
+    </section>
+
+    <section class="panel live-students-panel">
+      <div class="panel-head">
+        <h2>Students In Class (Live)</h2>
+        <span class="muted">รายชื่อและสถานะล่าสุดจากกล้อง</span>
+      </div>
+      <div id="live-students-list" class="live-students-list"></div>
+    </section>
+
+    <section class="panel distribution-panel">
+      <h2>State Distribution (Today)</h2>
+      <div id="state-distribution" class="state-list"></div>
+    </section>
+
+    <section class="panel recent-panel">
+      <h2>Recent Attendance</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Time</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody id="recent-attendance-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel rank-panel">
+      <h2>Drowsy Ranking (Window)</h2>
+      <ul id="drowsy-rank" class="rank-list"></ul>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

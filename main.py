@@ -5,15 +5,8 @@ import math
 import time
 import numpy as np
 import threading
+import requests
 from datetime import datetime
-<<<<<<< Updated upstream
-=======
-from ultralytics import YOLO
-import mediapipe as mp
-from scipy.spatial import distance as scipy_dist
-from PIL import ImageFont, ImageDraw, Image
-from face_storage import FaceStorageManager
->>>>>>> Stashed changes
 
 class ClassroomFacialRecognitionService:
 
@@ -28,53 +21,11 @@ class ClassroomFacialRecognitionService:
         self.BLUR_MIN_THRESH = 40.0
         self.BLUR_MAX_THRESH = 60.0
         self.BLUR_FACE_RATIO = 800.0
-
-<<<<<<< Updated upstream
+        self.EAR_THRESH = float(os.getenv("CFRS_EAR_THRESH", "0.20"))
+        self.POSE_INATTENTIVE_PENALTY = float(os.getenv("CFRS_POSE_INATTENTIVE_PENALTY", "0.06"))
+        self.body_detector = cv2.HOGDescriptor()
+        self.body_detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self._load_and_encode_database()
-=======
-        print(f"[{datetime.now()}] INFO: Booting Counting Service (YOLOv8n)...")
-        self.yolo_model = YOLO("yolov8n.pt")  
-        self.person_count = 0
-        self.last_yolo_boxes = []
-        self.yolo_skip_frames = 10
-        self.frame_counter = 0
-
-        print(f"[{datetime.now()}] INFO: Booting Behavior Service (MediaPipe Tasks)...")
-        model_path = 'face_landmarker.task'
-        if not os.path.exists(model_path):
-            import urllib.request
-            print(f"[{datetime.now()}] WARN: Downloading MediaPipe Face Landmarker model...")
-            urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", model_path)
-            
-        base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
-        options = mp.tasks.vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            num_faces=10,
-            min_face_detection_confidence=0.6,
-            min_face_presence_confidence=0.6,
-            output_facial_transformation_matrixes=True
-        )
-        self.face_landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
-
-        self.EAR_THRESH = 0.18
-        self.LEFT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
-        self.RIGHT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
-
-        self.face_recognizer = None
-        if hasattr(cv2, "face") and hasattr(cv2.face, "LBPHFaceRecognizer_create"):
-            self.face_recognizer = cv2.face.LBPHFaceRecognizer_create()
-        else:
-            print(f"[{datetime.now()}] WARN: cv2.face not available. Install opencv-contrib-python for LBPH identity.")
-        self.label_to_name = {}
-        self.name_to_label = {}
-        self.is_lbph_trained = False
-        self.face_storage = FaceStorageManager(storage_root='storage/faces', target_size=(200, 200))
-        self._load_and_train_database()
-
-    def _load_and_train_database(self):
-        if self.face_recognizer is None:
-            return
->>>>>>> Stashed changes
 
     def _load_and_encode_database(self):
         """Indexing ด้วย num_jitters=5 พร้อม Error Handling"""
@@ -84,14 +35,6 @@ class ClassroomFacialRecognitionService:
             print(f"[{datetime.now()}] WARN: Directory created. Please add images to '{self.path}'.")
             return
 
-<<<<<<< Updated upstream
-=======
-        faces = []
-        labels = []
-        current_id = 0
-        cached_faces = 0
-
->>>>>>> Stashed changes
         for filename in os.listdir(self.path):
             if not filename.lower().endswith(('.png', '.jpg', '.jpeg')): continue
 
@@ -99,32 +42,10 @@ class ClassroomFacialRecognitionService:
             img_path = os.path.join(self.path, filename)
 
             try:
-<<<<<<< Updated upstream
                 img = cv2.imread(img_path)
                 if img is None:
                     print(f"[{datetime.now()}] WARN: Cannot read {filename}. Skipping...")
                     continue
-=======
-                face_crop = self.face_storage.get_or_create_face_crop(
-                    img_path=img_path,
-                    person_name=name,
-                    face_landmarker=self.face_landmarker,
-                )
-                if face_crop is not None and face_crop.size > 0:
-                    faces.append(face_crop)
-                    labels.append(label_id)
-                    cached_faces += 1
-            except Exception as e:
-                print(f"[{datetime.now()}] WARN: Failed to load {img_path}: {e}")
-
-        self.face_storage.flush()
-        if cached_faces > 0:
-            print(f"[{datetime.now()}] INFO: Face storage cache ready ({cached_faces} samples).")
-                
-        if len(faces) > 0:
-            self.face_recognizer.train(faces, np.array(labels))
-            self.is_lbph_trained = True
->>>>>>> Stashed changes
 
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 encodings = face_recognition.face_encodings(rgb_img, num_jitters=5)
@@ -196,12 +117,40 @@ class ClassroomFacialRecognitionService:
         confidence = 1 / (1 + math.exp(self.CONFIDENCE_K * (distance - threshold)))
         return round(max(1.0, min(99.9, confidence * 100)), 2)
 
+    def _eye_aspect_ratio(self, eye_points):
+        if not eye_points or len(eye_points) < 6:
+            return 0.0
+        p = np.array(eye_points, dtype=np.float32)
+        a = np.linalg.norm(p[1] - p[5])
+        b = np.linalg.norm(p[2] - p[4])
+        c = np.linalg.norm(p[0] - p[3])
+        if c <= 1e-6:
+            return 0.0
+        return float((a + b) / (2.0 * c))
+
+    def _classify_attention_state(self, face_landmarks, pose_penalty=0.0):
+        if not face_landmarks:
+            return "ไม่ทราบสถานะ"
+
+        if pose_penalty >= self.POSE_INATTENTIVE_PENALTY:
+            return "ไม่ตั้งใจเรียน"
+
+        left_eye = face_landmarks.get("left_eye")
+        right_eye = face_landmarks.get("right_eye")
+        if not left_eye or not right_eye:
+            return "ไม่ทราบสถานะ"
+
+        left_ear = self._eye_aspect_ratio(left_eye)
+        right_ear = self._eye_aspect_ratio(right_eye)
+        avg_ear = (left_ear + right_ear) / 2.0
+        return "หลับ/เหม่อ" if avg_ear < self.EAR_THRESH else "ตั้งใจเรียน"
+
     def process_frame(self, frame, resize_scale=1):
         small_frame = cv2.resize(frame, (0, 0), fx=resize_scale, fy=resize_scale)
         rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
         face_locations = face_recognition.face_locations(rgb_small, model="hog")
-        face_encodings = face_recognition.face_encodings(rgb_small, face_locations, num_jitters=2)
+        face_encodings = face_recognition.face_encodings(rgb_small, face_locations, num_jitters=1)
         all_face_landmarks = face_recognition.face_landmarks(rgb_small, face_locations)
 
         detections = []
@@ -212,13 +161,21 @@ class ClassroomFacialRecognitionService:
             scale_back = 1.0 / resize_scale
             y1, x2, y2, x1 = [int(v * scale_back) for v in face_loc]
             bbox = {"Top": y1, "Right": x2, "Bottom": y2, "Left": x1}
-
-            if not self._check_blur_dynamic(rgb_small, face_loc):
-                detections.append({"Name": "Moving/Blur", "Confidence": 0.0, "BoundingBox": bbox})
-                continue
-
             current_landmarks = all_face_landmarks[idx] if idx < len(all_face_landmarks) else None
             pose_penalty = self._get_pose_penalty(current_landmarks)
+            behavior_state = self._classify_attention_state(current_landmarks, pose_penalty=pose_penalty)
+
+            if not self._check_blur_dynamic(rgb_small, face_loc):
+                detections.append(
+                    {
+                        "Name": "Moving/Blur",
+                        "Confidence": 0.0,
+                        "BoundingBox": bbox,
+                        "State": "ไม่ทราบสถานะ",
+                    }
+                )
+                continue
+
             threshold, required_margin = self.get_dynamic_threshold_and_margin(face_width, pose_penalty)
 
             person_distances = {}
@@ -232,7 +189,7 @@ class ClassroomFacialRecognitionService:
 
             if len(sorted_persons) > 0:
                 best_match_name, best_dist = sorted_persons[0]
-                
+
                 actual_margin = 1.0
                 if len(sorted_persons) > 1:
                     actual_margin = sorted_persons[1][1] - best_dist
@@ -244,18 +201,110 @@ class ClassroomFacialRecognitionService:
                 else:
                     name = "Unknown"
 
-            detections.append({
-                "Name": name,
-                "Confidence": conf,
-                "BoundingBox": bbox
-            })
+            detections.append(
+                {
+                    "Name": name,
+                    "Confidence": conf,
+                    "BoundingBox": bbox,
+                    "State": behavior_state,
+                }
+            )
 
         return detections
+
+    def detect_bodies(self, frame, resize_scale=0.45):
+        scale = max(0.25, min(1.0, resize_scale))
+        small_frame = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+
+        rects, _ = self.body_detector.detectMultiScale(
+            small_frame,
+            winStride=(8, 8),
+            padding=(8, 8),
+            scale=1.05,
+        )
+
+        detections = []
+        scale_back = 1.0 / scale
+        for x, y, w, h in rects:
+            x1 = int(x * scale_back)
+            y1 = int(y * scale_back)
+            x2 = int((x + w) * scale_back)
+            y2 = int((y + h) * scale_back)
+            if (x2 - x1) < 60 or (y2 - y1) < 120:
+                continue
+            detections.append({"Top": y1, "Right": x2, "Bottom": y2, "Left": x1})
+        return detections
+
+
+def state_for_overlay(state: str) -> str:
+    if state == "ตั้งใจเรียน":
+        return "attentive"
+    if state == "ไม่ตั้งใจเรียน":
+        return "inattentive"
+    if state == "หลับ/เหม่อ":
+        return "drowsy"
+    if state == "ไม่ทราบสถานะ":
+        return "unknown"
+    return "other"
+
+
+def bbox_center(bb):
+    return ((bb["Left"] + bb["Right"]) // 2, (bb["Top"] + bb["Bottom"]) // 2)
+
+
+def bbox_iou(a, b):
+    x_left = max(a["Left"], b["Left"])
+    y_top = max(a["Top"], b["Top"])
+    x_right = min(a["Right"], b["Right"])
+    y_bottom = min(a["Bottom"], b["Bottom"])
+
+    if x_right <= x_left or y_bottom <= y_top:
+        return 0.0
+
+    inter_area = float((x_right - x_left) * (y_bottom - y_top))
+    area_a = float((a["Right"] - a["Left"]) * (a["Bottom"] - a["Top"]))
+    area_b = float((b["Right"] - b["Left"]) * (b["Bottom"] - b["Top"]))
+    denom = area_a + area_b - inter_area
+    if denom <= 1e-6:
+        return 0.0
+    return inter_area / denom
 
 
 if __name__ == "__main__":
     service = ClassroomFacialRecognitionService()
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+    camera_width = int(os.getenv("CFRS_CAMERA_WIDTH", "960"))
+    camera_height = int(os.getenv("CFRS_CAMERA_HEIGHT", "540"))
+    frame_resize_scale = float(os.getenv("CFRS_FRAME_RESIZE_SCALE", "0.5"))
+    frame_resize_scale = max(0.35, min(1.0, frame_resize_scale))
+    process_every_n_frames = int(os.getenv("CFRS_PROCESS_EVERY_N_FRAMES", "3"))
+    process_every_n_frames = max(1, min(6, process_every_n_frames))
+    body_detect_every_n_frames = int(os.getenv("CFRS_BODY_DETECT_EVERY_N_FRAMES", "4"))
+    body_detect_every_n_frames = max(1, min(8, body_detect_every_n_frames))
+    body_resize_scale = float(os.getenv("CFRS_BODY_RESIZE_SCALE", "0.45"))
+    body_resize_scale = max(0.25, min(0.8, body_resize_scale))
+    body_match_max_distance = int(os.getenv("CFRS_BODY_MATCH_MAX_DISTANCE", "190"))
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+
+    backend_url = os.getenv("CFRS_BACKEND_INGEST_URL", "http://127.0.0.1:5000/api/result")
+    frame_output_path = os.getenv("CFRS_CAMERA_FRAME_PATH", "storage/latest_frame.jpg")
+    post_interval_sec = float(os.getenv("CFRS_POST_INTERVAL_SEC", "1.5"))
+    frame_write_interval_sec = float(os.getenv("CFRS_FRAME_WRITE_INTERVAL_SEC", "0.45"))
+    last_post_time = 0.0
+    last_post_error_time = 0.0
+    last_frame_write_time = 0.0
+    last_frame_error_time = 0.0
+    last_fps_time = time.time()
+    smoothed_fps = 0.0
+    frame_index = 0
+    cached_results = []
+    cached_body_boxes = []
+
+    frame_output_dir = os.path.dirname(frame_output_path) or "."
+    os.makedirs(frame_output_dir, exist_ok=True)
 
     tracked_faces = {}
     next_track_id = 0
@@ -273,7 +322,24 @@ if __name__ == "__main__":
         if not ret: break
 
         current_time = time.time()
-        results = service.process_frame(frame)
+        frame_index += 1
+        should_run_heavy = (frame_index % process_every_n_frames == 1) or (not cached_results)
+        if should_run_heavy:
+            cached_results = service.process_frame(frame, resize_scale=frame_resize_scale)
+        results = cached_results
+
+        should_run_body = (frame_index % body_detect_every_n_frames == 1) or (not cached_body_boxes)
+        if should_run_body:
+            cached_body_boxes = service.detect_bodies(frame, resize_scale=body_resize_scale)
+        body_boxes = cached_body_boxes
+
+        payload_students = []
+        drowsy_count = 0
+        attentive_count = 0
+        inattentive_count = 0
+        unknown_count = 0
+        seen_track_ids = set()
+        face_boxes = []
         with tracker_lock:
             keys_to_delete = [k for k, v in tracked_faces.items() if current_time - v["last_seen"] > TIMEOUT]
             for k in keys_to_delete:
@@ -283,6 +349,9 @@ if __name__ == "__main__":
                 bb = res["BoundingBox"]
                 ai_name = res["Name"]
                 conf = res["Confidence"]
+                behavior_state = res.get("State", "ไม่ทราบสถานะ")
+                behavior_display = state_for_overlay(behavior_state)
+                face_boxes.append(bb)
                 
                 cx = (bb["Left"] + bb["Right"]) // 2
                 cy = (bb["Top"] + bb["Bottom"]) // 2
@@ -300,9 +369,11 @@ if __name__ == "__main__":
                 is_confirmed = False
                 display_name = ai_name
                 elapsed_time = 0.0
+                payload_track_id = None
 
                 if best_match_id is None:
                     if ai_name not in ["Unknown", "Moving/Blur"]:
+                        payload_track_id = next_track_id
                         tracked_faces[next_track_id] = {
                             "name": ai_name,
                             "centroid": (cx, cy),
@@ -314,6 +385,7 @@ if __name__ == "__main__":
                         is_tracking = True
                         next_track_id += 1
                 else:
+                    payload_track_id = best_match_id
                     t_data = tracked_faces[best_match_id]
                     t_data["centroid"] = (cx, cy)
                     t_data["last_seen"] = current_time
@@ -335,22 +407,137 @@ if __name__ == "__main__":
                         text = "Moving/Blur"
                     else:
                         color = (0, 0, 255)
-                        text = "Unknown" 
+                        text = f"Unknown ({behavior_display})"
                 else:
                     if is_confirmed:
                         color = (0, 255, 0)
-                        text = f"{display_name} (Verified {conf}%)"
+                        text = f"{display_name} ({behavior_display}) {conf}%"
                         if display_name not in confirmed_names_db:
                             print(f">>> [API/Database] เช็คชื่อ: {display_name} เวลา: {datetime.now()}")
                             confirmed_names_db.add(display_name)
                     else:
                         color = (0, 255, 255)
                         countdown = max(0, CONFIRMATION_TIME - elapsed_time)
-                        text = f"Verifying {display_name}... {countdown:.1f}s"
+                        text = f"Verifying {display_name} ({behavior_display}) {countdown:.1f}s"
+
+                payload_state = behavior_state if display_name != "Moving/Blur" else "ไม่ทราบสถานะ"
+                payload_name = display_name if display_name else "Unknown"
+                payload_students.append(
+                    {
+                        "track_id": payload_track_id,
+                        "name": payload_name,
+                        "state": payload_state,
+                        "confirmed": bool(is_confirmed),
+                        "confidence": float(conf),
+                    }
+                )
+                if payload_track_id is not None:
+                    seen_track_ids.add(payload_track_id)
+
+                if payload_state == "หลับ/เหม่อ":
+                    drowsy_count += 1
+                elif payload_state == "ตั้งใจเรียน":
+                    attentive_count += 1
+                elif payload_state == "ไม่ตั้งใจเรียน":
+                    inattentive_count += 1
+                else:
+                    unknown_count += 1
 
                 cv2.rectangle(frame, (bb["Left"], bb["Top"]), (bb["Right"], bb["Bottom"]), color, 2)
                 cv2.putText(frame, text, (bb["Left"], bb["Top"] - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            # Body fallback: continue tracking and behavior when face temporarily disappears.
+            for body_bb in body_boxes:
+                overlap_with_face = any(bbox_iou(body_bb, fb) > 0.22 for fb in face_boxes)
+                if overlap_with_face:
+                    continue
+
+                body_cx, body_cy = bbox_center(body_bb)
+                best_track_id = None
+                best_dist = float("inf")
+
+                for t_id, t_data in tracked_faces.items():
+                    if t_id in seen_track_ids:
+                        continue
+                    dist = math.hypot(body_cx - t_data["centroid"][0], body_cy - t_data["centroid"][1])
+                    if dist < best_dist and dist <= body_match_max_distance:
+                        best_dist = dist
+                        best_track_id = t_id
+
+                if best_track_id is None:
+                    continue
+
+                t_data = tracked_faces[best_track_id]
+                t_data["centroid"] = (body_cx, body_cy)
+                t_data["last_seen"] = current_time
+                seen_track_ids.add(best_track_id)
+
+                inherited_name = t_data.get("name", "Unknown") or "Unknown"
+                if inherited_name in ["Moving/Blur", ""]:
+                    inherited_name = "Unknown"
+
+                payload_students.append(
+                    {
+                        "track_id": best_track_id,
+                        "name": inherited_name,
+                        "state": "ฟุบหลับ/หันหลัง",
+                        "confirmed": False,
+                        "confidence": 0.0,
+                    }
+                )
+                drowsy_count += 1
+
+                body_text_name = inherited_name if inherited_name != "Unknown" else "Unknown"
+                body_text = f"{body_text_name} (body-fallback drowsy)"
+                cv2.rectangle(frame, (body_bb["Left"], body_bb["Top"]), (body_bb["Right"], body_bb["Bottom"]), (255, 160, 0), 2)
+                cv2.putText(frame, body_text, (body_bb["Left"], max(18, body_bb["Top"] - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 180, 50), 2)
+
+        now = time.time()
+        dt = max(1e-6, now - last_fps_time)
+        last_fps_time = now
+        current_fps = 1.0 / dt
+        smoothed_fps = current_fps if smoothed_fps == 0.0 else (smoothed_fps * 0.9 + current_fps * 0.1)
+
+        cv2.putText(frame, f"People: {len(results)}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (60, 220, 60), 2)
+        cv2.putText(frame, f"Attentive: {attentive_count}", (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (80, 210, 255), 2)
+        cv2.putText(frame, f"Inattentive: {inattentive_count}", (10, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (30, 180, 255), 2)
+        cv2.putText(frame, f"Drowsy: {drowsy_count}", (10, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (40, 60, 255), 2)
+        cv2.putText(frame, f"Unknown: {unknown_count}", (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 180), 2)
+        cv2.putText(frame, f"FPS: {smoothed_fps:.1f}", (10, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 230), 2)
+
+        if current_time - last_post_time >= post_interval_sec:
+            last_post_time = current_time
+            payload = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "person_count": len(payload_students),
+                "students": payload_students,
+            }
+            try:
+                requests.post(backend_url, json=payload, timeout=1.8)
+            except Exception as exc:
+                # Avoid flooding terminal with the same network error every frame.
+                if current_time - last_post_error_time >= 8:
+                    print(f"[{datetime.now()}] WARN: Cannot send payload to backend: {exc}")
+                    last_post_error_time = current_time
+
+        if current_time - last_frame_write_time >= frame_write_interval_sec:
+            last_frame_write_time = current_time
+            try:
+                ok, jpeg = cv2.imencode(
+                    ".jpg",
+                    frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 78],
+                )
+                if ok:
+                    tmp_path = f"{frame_output_path}.tmp"
+                    with open(tmp_path, "wb") as fp:
+                        fp.write(jpeg.tobytes())
+                    os.replace(tmp_path, frame_output_path)
+            except Exception as exc:
+                if current_time - last_frame_error_time >= 8:
+                    print(f"[{datetime.now()}] WARN: Cannot write camera frame for dashboard: {exc}")
+                    last_frame_error_time = current_time
 
         cv2.imshow('Ultimate Classroom Identity (Tracker Lock)', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'): break

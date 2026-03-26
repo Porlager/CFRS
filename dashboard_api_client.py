@@ -30,6 +30,15 @@ def call_behavior_report(base_url: str, start_date: str, end_date: str):
     pretty_print(response.json())
 
 
+def call_dashboard_summary(base_url: str, days: int):
+    response = requests.get(
+        f"{base_url}/api/reports/dashboard",
+        params={"days": days},
+        timeout=5,
+    )
+    pretty_print(response.json())
+
+
 def call_auto_save(base_url: str, full_name: str):
     payload = {
         "full_name": full_name,
@@ -56,9 +65,10 @@ def call_send_sample_result(base_url: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Dashboard API client for CFRS")
-    parser.add_argument("command", choices=["health", "today", "behavior", "auto-save", "sample"], help="API command")
+    parser.add_argument("command", choices=["health", "today", "behavior", "dashboard", "auto-save", "sample"], help="API command")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Dashboard API base URL")
     parser.add_argument("--name", default="", help="Full name for auto-save")
+    parser.add_argument("--days", type=int, default=7, help="Window days for dashboard summary")
     parser.add_argument("--start-date", default=datetime.now().date().isoformat(), help="Behavior report start date YYYY-MM-DD")
     parser.add_argument("--end-date", default=datetime.now().date().isoformat(), help="Behavior report end date YYYY-MM-DD")
 
@@ -70,6 +80,8 @@ def main():
         call_today_report(args.base_url)
     elif args.command == "behavior":
         call_behavior_report(args.base_url, args.start_date, args.end_date)
+    elif args.command == "dashboard":
+        call_dashboard_summary(args.base_url, args.days)
     elif args.command == "auto-save":
         if not args.name.strip():
             raise SystemExit("--name is required for auto-save")
