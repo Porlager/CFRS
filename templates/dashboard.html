@@ -6,147 +6,229 @@
   <title>CFRS Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 </head>
 <body data-refresh-seconds="{{ refresh_seconds }}">
-  <div class="bg-layer"></div>
+  <div class="ambient-bg"></div>
 
-  <header class="hero container">
-    <div class="hero-copy">
-      <p class="eyebrow">CFRS LIVE MONITORING</p>
-      <h1>Classroom Dashboard</h1>
-      <p class="subtitle">ติดตามการเข้าเรียนและสถานะพฤติกรรมแบบเรียลไทม์</p>
-    </div>
-    <div class="control-panel">
-      <label for="window-days">ช่วงข้อมูล</label>
-      <select id="window-days" aria-label="เลือกช่วงวัน">
-        <option value="7" selected>7 วัน</option>
-        <option value="14">14 วัน</option>
-        <option value="30">30 วัน</option>
-      </select>
-
-      <label for="attendance-search">ค้นหาชื่อเช็คชื่อ</label>
-      <input id="attendance-search" type="search" placeholder="พิมพ์ชื่อเพื่อกรองตาราง" autocomplete="off">
-
-      <div class="control-actions">
-        <button id="refresh-btn" type="button">Refresh Now</button>
-        <button id="fullscreen-btn" type="button" class="secondary">Full Screen</button>
+  <div class="layout-wrapper">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo-icon"><span class="material-symbols-rounded">visibility</span></div>
+        <div class="brand-text">
+          <h1>CFRS</h1>
+          <span>Live Monitoring</span>
+        </div>
       </div>
-      <a href="/register" class="register-link">ลงทะเบียนใบหน้าใหม่</a>
-
-      <p class="hint">Auto refresh ทุก <span id="refresh-sec">{{ refresh_seconds }}</span> วินาที</p>
-      <p class="hint">อัปเดตล่าสุด: <span id="last-updated">-</span></p>
-      <p class="hint">API: <span id="api-status" class="status-pill">Connecting...</span></p>
-    </div>
-  </header>
-
-  <main class="container grid-root">
-    <section class="panel checkin-spotlight">
-      <div class="panel-head">
-        <h2>Live Check-in Board</h2>
-        <span class="muted">หน้าจอเช็คชื่อแบบเรียลไทม์</span>
-      </div>
-      <div class="spotlight-grid">
-        <article class="spotlight-camera">
-          <p class="label">Live Camera</p>
-          <div class="camera-frame-wrap">
-            <img id="camera-frame" src="/api/camera/frame" alt="Live camera preview">
+      
+      <nav class="nav-menu">
+        <p class="nav-label">Controls</p>
+        
+        <div class="control-group">
+          <label for="window-days">ช่วงข้อมูล (Days)</label>
+          <div class="select-wrapper">
+            <select id="window-days" aria-label="เลือกช่วงวัน">
+              <option value="7" selected>7 วันย้อนหลัง</option>
+              <option value="14">14 วันย้อนหลัง</option>
+              <option value="30">30 วันย้อนหลัง</option>
+            </select>
+            <span class="material-symbols-rounded select-icon">expand_more</span>
           </div>
-          <p id="camera-status" class="muted">กำลังเชื่อมต่อภาพกล้อง...</p>
-          <p class="muted">คนในห้อง: <strong id="live-person-count">0</strong></p>
-          <p class="muted">ตั้งใจเรียน: <strong id="live-attentive-count">0</strong> | ไม่ตั้งใจ: <strong id="live-inattentive-count">0</strong> | ง่วง/หลับ: <strong id="live-drowsy-count">0</strong></p>
-          <p class="muted">Unknown: <strong id="live-unknown-count">0</strong></p>
-        </article>
-        <article class="spotlight-card">
-          <p class="label">เช็คชื่อล่าสุด</p>
-          <h3 id="latest-checkin-name">-</h3>
-          <p id="latest-checkin-time" class="muted">-</p>
-          <p id="latest-checkin-confidence" class="muted">Confidence: -</p>
-        </article>
-        <article class="spotlight-feed">
-          <p class="label">เข้าเรียนวันนี้</p>
-          <div id="attendance-chip-list" class="chip-list"></div>
-        </article>
-      </div>
-    </section>
+        </div>
 
-    <section class="panel kpi-panel">
-      <h2>Key Metrics Today</h2>
-      <div class="kpi-grid">
-        <article class="kpi-card">
-          <p>Attendance</p>
-          <h3 id="kpi-attendance">0</h3>
-        </article>
-        <article class="kpi-card info">
-          <p>Attendance Rate</p>
-          <h3 id="kpi-attendance-rate">0%</h3>
-        </article>
-        <article class="kpi-card info">
-          <p>Active Students</p>
-          <h3 id="kpi-total-active">0</h3>
-        </article>
-        <article class="kpi-card warning">
-          <p>Drowsy Students</p>
-          <h3 id="kpi-drowsy-students">0</h3>
-        </article>
-        <article class="kpi-card danger">
-          <p>Unknown Events</p>
-          <h3 id="kpi-unknown-events">0</h3>
-        </article>
-        <article class="kpi-card">
-          <p>Behavior Events</p>
-          <h3 id="kpi-behavior-events">0</h3>
-        </article>
-      </div>
-    </section>
+        <div class="control-group">
+          <label for="attendance-search">ค้นหาชื่อ (Search)</label>
+          <div class="input-wrapper">
+            <span class="material-symbols-rounded search-icon">search</span>
+            <input id="attendance-search" type="search" placeholder="พิมพ์ชื่อนักศึกษา..." autocomplete="off">
+          </div>
+        </div>
 
-    <section class="panel trend-panel">
-      <div class="panel-head">
-        <h2>Attendance vs Drowsy Trend</h2>
-        <span id="trend-date-range" class="muted">-</span>
+        <div class="action-buttons">
+          <button id="refresh-btn" type="button" class="btn primary">
+            <span class="material-symbols-rounded">refresh</span> อัปเดตข้อมูล
+          </button>
+          <button id="fullscreen-btn" type="button" class="btn secondary">
+            <span class="material-symbols-rounded">fullscreen</span> เต็มจอ
+          </button>
+          <a href="/register" class="btn outline link-btn">
+            <span class="material-symbols-rounded">person_add</span> ลงทะเบียนใบหน้า
+          </a>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <div class="status-indicator">
+          <div class="status-dot" id="api-dot"></div>
+          <span id="api-status" class="status-pill">Connecting...</span>
+        </div>
+        <div class="meta-info">
+          <p>Auto-refresh: <strong id="refresh-sec">{{ refresh_seconds }}</strong>s</p>
+          <p>อัปเดตล่าสุด: <span id="last-updated">-</span></p>
+        </div>
       </div>
-      <div id="trend-bars" class="trend-bars"></div>
-      <div class="legend">
-        <span><i class="dot attendance"></i>Attendance</span>
-        <span><i class="dot drowsy"></i>Drowsy Events</span>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="top-header">
+        <div class="header-titles">
+          <h2>Classroom Overview</h2>
+          <p>ติดตามการเข้าเรียนและสถานะพฤติกรรมเรียลไทม์</p>
+        </div>
+      </header>
+
+      <div class="dashboard-grid">
+        <!-- KPI Row -->
+        <section class="kpi-row">
+          <div class="kpi-card glass">
+            <div class="kpi-icon blue"><span class="material-symbols-rounded">group</span></div>
+            <div class="kpi-data">
+              <p>Attendance</p>
+              <h3 id="kpi-attendance">0</h3>
+            </div>
+          </div>
+          <div class="kpi-card glass">
+            <div class="kpi-icon teal"><span class="material-symbols-rounded">analytics</span></div>
+            <div class="kpi-data">
+              <p>Att. Rate</p>
+              <h3 id="kpi-attendance-rate">0%</h3>
+            </div>
+          </div>
+          <div class="kpi-card glass">
+            <div class="kpi-icon indigo"><span class="material-symbols-rounded">how_to_reg</span></div>
+            <div class="kpi-data">
+              <p>Active Students</p>
+              <h3 id="kpi-total-active">0</h3>
+            </div>
+          </div>
+          <div class="kpi-card glass warning-card">
+            <div class="kpi-icon orange"><span class="material-symbols-rounded">bedtime</span></div>
+            <div class="kpi-data">
+              <p>Drowsy</p>
+              <h3 id="kpi-drowsy-students">0</h3>
+            </div>
+          </div>
+          <div class="kpi-card glass danger-card">
+            <div class="kpi-icon red"><span class="material-symbols-rounded">warning</span></div>
+            <div class="kpi-data">
+              <p>Unknowns</p>
+              <h3 id="kpi-unknown-events">0</h3>
+            </div>
+          </div>
+          <div class="kpi-card glass">
+            <div class="kpi-icon purple"><span class="material-symbols-rounded">psychology</span></div>
+            <div class="kpi-data">
+              <p>Behaviors</p>
+              <h3 id="kpi-behavior-events">0</h3>
+            </div>
+          </div>
+        </section>
+
+        <!-- Main Camera & Spotlight -->
+        <section class="camera-spotlight-section">
+          <div class="panel glass live-camera-panel">
+            <div class="panel-header">
+              <h3 class="flex-align"><span class="material-symbols-rounded live-icon">radio_button_checked</span> Live Camera Feed</h3>
+              <span id="camera-status" class="badge">Connecting...</span>
+            </div>
+            <div class="camera-wrapper">
+              <img id="camera-frame" src="/api/camera/frame" alt="Live camera preview">
+              <div class="camera-overlay-stats">
+                <div class="stat-pill"><span class="material-symbols-rounded">groups</span> <span id="live-person-count">0</span></div>
+                <div class="stat-pill green"><span class="material-symbols-rounded">menu_book</span> <span id="live-attentive-count">0</span></div>
+                <div class="stat-pill orange"><span class="material-symbols-rounded">notifications_paused</span> <span id="live-inattentive-count">0</span></div>
+                <div class="stat-pill red"><span class="material-symbols-rounded">snooze</span> <span id="live-drowsy-count">0</span></div>
+                <div class="stat-pill gray"><span class="material-symbols-rounded">help</span> <span id="live-unknown-count">0</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="right-panes">
+            <div class="panel glass recent-spotlight">
+              <div class="panel-header">
+                <h3>เช็คชื่อล่าสุด (Latest)</h3>
+              </div>
+              <div class="spotlight-content">
+                <div class="avatar-placeholder"><span class="material-symbols-rounded">person</span></div>
+                <h2 id="latest-checkin-name">-</h2>
+                <p id="latest-checkin-time" class="text-muted">-</p>
+                <small id="latest-checkin-confidence" class="confidence-text">Confidence: -</small>
+              </div>
+            </div>
+            
+            <div class="panel glass today-cast">
+              <div class="panel-header">
+                <h3>เข้าเรียนวันนี้ (Today)</h3>
+              </div>
+              <div id="attendance-chip-list" class="chip-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Charts & Lists -->
+        <div class="bottom-grid">
+          <div class="left-col">
+            <section class="panel glass trend-panel">
+              <div class="panel-header">
+                <h3>Attendance vs Drowsy Trend</h3>
+                <span id="trend-date-range" class="badge outline">-</span>
+              </div>
+              <div id="trend-bars" class="trend-bars"></div>
+              <div class="legend">
+                <span><i class="dot attendance"></i>Attendance</span>
+                <span><i class="dot drowsy"></i>Drowsy</span>
+              </div>
+            </section>
+
+            <section class="panel glass distribution-panel">
+              <div class="panel-header">
+                <h3>State Distribution</h3>
+              </div>
+              <div id="state-distribution" class="state-list"></div>
+            </section>
+
+            <section class="panel glass table-panel">
+              <div class="panel-header">
+                <h3>Recent Check-ins</h3>
+              </div>
+              <div class="table-wrap">
+                <table class="modern-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Time</th>
+                      <th>Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recent-attendance-body"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="right-col">
+            <section class="panel glass live-students-panel">
+              <div class="panel-header">
+                <h3>Students In Class (Live)</h3>
+              </div>
+              <div id="live-students-list" class="live-students-list"></div>
+            </section>
+
+            <section class="panel glass rank-panel">
+              <div class="panel-header">
+                <h3>Drowsy Ranking (Window)</h3>
+              </div>
+              <ul id="drowsy-rank" class="rank-list"></ul>
+            </section>
+          </div>
+        </div>
       </div>
-    </section>
-
-    <section class="panel live-students-panel">
-      <div class="panel-head">
-        <h2>Students In Class (Live)</h2>
-        <span class="muted">รายชื่อและสถานะล่าสุดจากกล้อง</span>
-      </div>
-      <div id="live-students-list" class="live-students-list"></div>
-    </section>
-
-    <section class="panel distribution-panel">
-      <h2>State Distribution (Today)</h2>
-      <div id="state-distribution" class="state-list"></div>
-    </section>
-
-    <section class="panel recent-panel">
-      <h2>Recent Attendance</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Time</th>
-              <th>Confidence</th>
-            </tr>
-          </thead>
-          <tbody id="recent-attendance-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel rank-panel">
-      <h2>Drowsy Ranking (Window)</h2>
-      <ul id="drowsy-rank" class="rank-list"></ul>
-    </section>
-  </main>
+    </main>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
