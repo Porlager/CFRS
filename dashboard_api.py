@@ -1,6 +1,7 @@
 import atexit
 import os
 import re
+import socket
 from datetime import date, datetime
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -25,6 +26,19 @@ def _normalize_person_name(raw: str) -> str:
     return " ".join(str(raw or "").strip().split())
 
 
+def _classify_state_bucket(state: str) -> str:
+    normalized = str(state or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    if any(k in normalized for k in ("หลับ", "ง่วง", "drowsy", "sleep", "ฟุบ", "นอน")):
+        return "drowsy"
+    if any(k in normalized for k in ("ไม่ตั้งใจ", "inattentive", "away", "looking_away", "หันหลัง")):
+        return "inattentive"
+    if "ไม่ตั้งใจ" not in normalized and ("ตั้งใจ" in normalized or "attentive" in normalized):
+        return "attentive"
+    return "unknown"
+
+
 def _person_name_to_token(name: str) -> str:
     token = re.sub(r"\s+", "_", name.strip().upper())
     token = re.sub(r"[^0-9A-Zก-๙_]", "", token)
@@ -35,6 +49,37 @@ def _person_name_to_token(name: str) -> str:
 def _allowed_image_filename(filename: str) -> bool:
     ext = os.path.splitext(filename or "")[1].lower()
     return ext in ALLOWED_IMAGE_EXTENSIONS
+
+
+def _is_port_available(host: str, port: int) -> bool:
+    bind_host = host
+    if host in ("0.0.0.0", ""):
+        bind_host = "127.0.0.1"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((bind_host, port))
+            return True
+        except OSError:
+            return False
+
+
+def _resolve_run_port(host: str, preferred_port: int) -> tuple[int, bool]:
+    fallback_range = _parse_bounded_int(os.getenv("CFRS_PORT_FALLBACK_RANGE", "20"), 20, 1, 200)
+    if _is_port_available(host, preferred_port):
+        return preferred_port, False
+
+    for offset in range(1, fallback_range + 1):
+        candidate = preferred_port + offset
+        if candidate > 65535:
+            break
+        if _is_port_available(host, candidate):
+            return candidate, True
+
+    raise RuntimeError(
+        f"Port {preferred_port} is busy and no free port found in +{fallback_range} range. "
+        "Set CFRS_PORT=<free_port> explicitly."
+    )
 
 
 def create_app(test_config=None) -> Flask:
@@ -140,17 +185,21 @@ def create_app(test_config=None) -> Flask:
         for item in students:
             state = str(item.get("state", "ไม่ทราบสถานะ"))
             state_counts[state] = state_counts.get(state, 0) + 1
-            if state in DROWSY_STATES:
+            state_bucket = _classify_state_bucket(state)
+            if state_bucket == "drowsy":
                 drowsy += 1
-            elif state in INATTENTIVE_STATES:
+            elif state_bucket == "inattentive":
                 inattentive += 1
-            elif state == "ตั้งใจเรียน":
+            elif state_bucket == "attentive":
                 attentive += 1
             else:
                 unknown += 1
 
             raw_name = str(item.get("name", "Unknown")).strip()
             name = raw_name if raw_name else "Unknown"
+            student_code = _normalize_person_name(item.get("student_code"))
+            if not student_code:
+                student_code = None
             confidence_raw = item.get("confidence")
             try:
                 confidence = float(confidence_raw) if confidence_raw is not None else None
@@ -161,6 +210,7 @@ def create_app(test_config=None) -> Flask:
                 {
                     "track_id": item.get("track_id"),
                     "name": name,
+                    "student_code": student_code,
                     "state": state,
                     "confirmed": bool(item.get("confirmed", False)),
                     "confidence": confidence,
@@ -185,11 +235,13 @@ def create_app(test_config=None) -> Flask:
     def auto_save_attendance() -> tuple:
         body = request.get_json(silent=True) or {}
         full_name = body.get("full_name")
-        if not full_name:
+        student_code = _normalize_person_name(body.get("student_code"))
+        if not full_name and not student_code:
             return jsonify({"ok": False, "error": "full_name_required"}), 400
 
         result = get_repo().auto_save_attendance(
-            full_name=full_name,
+            full_name=full_name or student_code,
+            student_code=student_code,
             timestamp=body.get("timestamp"),
             confidence=body.get("confidence"),
             track_id=body.get("track_id"),
@@ -306,5 +358,21 @@ app = create_app()
 
 if __name__ == "__main__":
     host = os.getenv("CFRS_HOST", "0.0.0.0")
-    port = _parse_bounded_int(os.getenv("CFRS_PORT", "5000"), 5000, 1, 65535)
+    preferred_port = _parse_bounded_int(os.getenv("CFRS_PORT", "5000"), 5000, 1, 65535)
+    auto_fallback = str(os.getenv("CFRS_PORT_AUTO_FALLBACK", "1")).strip().lower() in ("1", "true", "yes", "on")
+
+    if auto_fallback:
+        try:
+            port, used_fallback = _resolve_run_port(host, preferred_port)
+        except RuntimeError as exc:
+            print(f"[{datetime.now()}] ERROR: {exc}")
+            raise SystemExit(1)
+        if used_fallback:
+            print(
+                f"[{datetime.now()}] WARN: Port {preferred_port} is busy. "
+                f"Using available port {port} (set CFRS_PORT to choose another port)."
+            )
+    else:
+        port = preferred_port
+
     app.run(host=host, port=port, debug=False)

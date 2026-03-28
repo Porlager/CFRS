@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CFRS Dashboard</title>
+  <title>แดชบอร์ดติดตามการเรียน | CFRS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,15 +20,15 @@
         <div class="logo-icon"><span class="material-symbols-rounded">visibility</span></div>
         <div class="brand-text">
           <h1>CFRS</h1>
-          <span>Live Monitoring</span>
+          <span>มอนิเตอร์แบบเรียลไทม์</span>
         </div>
       </div>
       
       <nav class="nav-menu">
-        <p class="nav-label">Controls</p>
+        <p class="nav-label">ตัวควบคุม</p>
         
         <div class="control-group">
-          <label for="window-days">ช่วงข้อมูล (Days)</label>
+          <label for="window-days">ช่วงข้อมูล</label>
           <div class="select-wrapper">
             <select id="window-days" aria-label="เลือกช่วงวัน">
               <option value="7" selected>7 วันย้อนหลัง</option>
@@ -40,7 +40,7 @@
         </div>
 
         <div class="control-group">
-          <label for="attendance-search">ค้นหาชื่อ (Search)</label>
+          <label for="attendance-search">ค้นหาชื่อ</label>
           <div class="input-wrapper">
             <span class="material-symbols-rounded search-icon">search</span>
             <input id="attendance-search" type="search" placeholder="พิมพ์ชื่อนักศึกษา..." autocomplete="off">
@@ -63,10 +63,10 @@
       <div class="sidebar-footer">
         <div class="status-indicator">
           <div class="status-dot" id="api-dot"></div>
-          <span id="api-status" class="status-pill">Connecting...</span>
+          <span id="api-status" class="status-pill">กำลังเชื่อมต่อ...</span>
         </div>
         <div class="meta-info">
-          <p>Auto-refresh: <strong id="refresh-sec">{{ refresh_seconds }}</strong>s</p>
+          <p>อัปเดตอัตโนมัติ: <strong id="refresh-sec">{{ refresh_seconds }}</strong> วิ</p>
           <p>อัปเดตล่าสุด: <span id="last-updated">-</span></p>
         </div>
       </div>
@@ -76,7 +76,7 @@
     <main class="main-content">
       <header class="top-header">
         <div class="header-titles">
-          <h2>Classroom Overview</h2>
+          <h2>ภาพรวมชั้นเรียน</h2>
           <p>ติดตามการเข้าเรียนและสถานะพฤติกรรมเรียลไทม์</p>
         </div>
       </header>
@@ -87,42 +87,42 @@
           <div class="kpi-card glass">
             <div class="kpi-icon blue"><span class="material-symbols-rounded">group</span></div>
             <div class="kpi-data">
-              <p>Attendance</p>
+              <p>ผู้เข้าเรียน</p>
               <h3 id="kpi-attendance">0</h3>
             </div>
           </div>
           <div class="kpi-card glass">
             <div class="kpi-icon teal"><span class="material-symbols-rounded">analytics</span></div>
             <div class="kpi-data">
-              <p>Att. Rate</p>
+              <p>อัตราการเข้าเรียน</p>
               <h3 id="kpi-attendance-rate">0%</h3>
             </div>
           </div>
           <div class="kpi-card glass">
             <div class="kpi-icon indigo"><span class="material-symbols-rounded">how_to_reg</span></div>
             <div class="kpi-data">
-              <p>Active Students</p>
+              <p>นักศึกษาที่พบ</p>
               <h3 id="kpi-total-active">0</h3>
             </div>
           </div>
           <div class="kpi-card glass warning-card">
             <div class="kpi-icon orange"><span class="material-symbols-rounded">bedtime</span></div>
             <div class="kpi-data">
-              <p>Drowsy</p>
+              <p>มีอาการง่วง</p>
               <h3 id="kpi-drowsy-students">0</h3>
             </div>
           </div>
           <div class="kpi-card glass danger-card">
             <div class="kpi-icon red"><span class="material-symbols-rounded">warning</span></div>
             <div class="kpi-data">
-              <p>Unknowns</p>
+              <p>ไม่ระบุสถานะ</p>
               <h3 id="kpi-unknown-events">0</h3>
             </div>
           </div>
           <div class="kpi-card glass">
             <div class="kpi-icon purple"><span class="material-symbols-rounded">psychology</span></div>
             <div class="kpi-data">
-              <p>Behaviors</p>
+              <p>พฤติกรรมทั้งหมด</p>
               <h3 id="kpi-behavior-events">0</h3>
             </div>
           </div>
@@ -132,11 +132,11 @@
         <section class="camera-spotlight-section">
           <div class="panel glass live-camera-panel">
             <div class="panel-header">
-              <h3 class="flex-align"><span class="material-symbols-rounded live-icon">radio_button_checked</span> Live Camera Feed</h3>
-              <span id="camera-status" class="badge">Connecting...</span>
+              <h3 class="flex-align"><span class="material-symbols-rounded live-icon">radio_button_checked</span> ภาพจากกล้อง</h3>
+              <span id="camera-status" class="badge">กำลังเชื่อมต่อ...</span>
             </div>
             <div class="camera-wrapper">
-              <img id="camera-frame" src="/api/camera/frame" alt="Live camera preview">
+              <img id="camera-frame" src="/api/camera/frame" alt="ภาพสดจากกล้อง">
               <div class="camera-overlay-stats">
                 <div class="stat-pill"><span class="material-symbols-rounded">groups</span> <span id="live-person-count">0</span></div>
                 <div class="stat-pill green"><span class="material-symbols-rounded">menu_book</span> <span id="live-attentive-count">0</span></div>
@@ -150,19 +150,19 @@
           <div class="right-panes">
             <div class="panel glass recent-spotlight">
               <div class="panel-header">
-                <h3>เช็คชื่อล่าสุด (Latest)</h3>
+                <h3>เช็คชื่อล่าสุด</h3>
               </div>
               <div class="spotlight-content">
                 <div class="avatar-placeholder"><span class="material-symbols-rounded">person</span></div>
                 <h2 id="latest-checkin-name">-</h2>
                 <p id="latest-checkin-time" class="text-muted">-</p>
-                <small id="latest-checkin-confidence" class="confidence-text">Confidence: -</small>
+                <small id="latest-checkin-confidence" class="confidence-text">ความมั่นใจ: -</small>
               </div>
             </div>
             
             <div class="panel glass today-cast">
               <div class="panel-header">
-                <h3>เข้าเรียนวันนี้ (Today)</h3>
+                <h3>เข้าเรียนวันนี้</h3>
               </div>
               <div id="attendance-chip-list" class="chip-list"></div>
             </div>
@@ -174,34 +174,34 @@
           <div class="left-col">
             <section class="panel glass trend-panel">
               <div class="panel-header">
-                <h3>Attendance vs Drowsy Trend</h3>
+                <h3>แนวโน้มการเข้าเรียนและอาการง่วง</h3>
                 <span id="trend-date-range" class="badge outline">-</span>
               </div>
               <div id="trend-bars" class="trend-bars"></div>
               <div class="legend">
-                <span><i class="dot attendance"></i>Attendance</span>
-                <span><i class="dot drowsy"></i>Drowsy</span>
+                <span><i class="dot attendance"></i>เข้าเรียน</span>
+                <span><i class="dot drowsy"></i>ง่วงหลับ</span>
               </div>
             </section>
 
             <section class="panel glass distribution-panel">
               <div class="panel-header">
-                <h3>State Distribution</h3>
+                <h3>สัดส่วนสถานะ</h3>
               </div>
               <div id="state-distribution" class="state-list"></div>
             </section>
 
             <section class="panel glass table-panel">
               <div class="panel-header">
-                <h3>Recent Check-ins</h3>
+                <h3>การเข้าเรียนล่าสุด</h3>
               </div>
               <div class="table-wrap">
                 <table class="modern-table">
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Time</th>
-                      <th>Confidence</th>
+                      <th>ชื่อ</th>
+                      <th>เวลา</th>
+                      <th>ความมั่นใจ</th>
                     </tr>
                   </thead>
                   <tbody id="recent-attendance-body"></tbody>
@@ -213,14 +213,14 @@
           <div class="right-col">
             <section class="panel glass live-students-panel">
               <div class="panel-header">
-                <h3>Students In Class (Live)</h3>
+                <h3>นักศึกษาในห้อง (เรียลไทม์)</h3>
               </div>
               <div id="live-students-list" class="live-students-list"></div>
             </section>
 
             <section class="panel glass rank-panel">
               <div class="panel-header">
-                <h3>Drowsy Ranking (Window)</h3>
+                <h3>อันดับคนหลับ (ตามช่วงเวลา)</h3>
               </div>
               <ul id="drowsy-rank" class="rank-list"></ul>
             </section>

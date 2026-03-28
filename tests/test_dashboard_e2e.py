@@ -45,6 +45,7 @@ def sample_payload():
             {
                 "track_id": 1,
                 "name": "SOMCHAI JAIDEE",
+                "student_code": "66051281",
                 "state": "ตั้งใจเรียน",
                 "confirmed": True,
                 "confidence": 97.0,
@@ -52,6 +53,7 @@ def sample_payload():
             {
                 "track_id": 2,
                 "name": "SUDAPORN DEEDEE",
+                "student_code": "66051282",
                 "state": "หลับ/เหม่อ",
                 "confirmed": True,
                 "confidence": 91.4,
@@ -59,6 +61,7 @@ def sample_payload():
             {
                 "track_id": 3,
                 "name": "SOMYING MUNGMEE",
+                "student_code": "66051283",
                 "state": "ไม่ตั้งใจเรียน",
                 "confirmed": False,
                 "confidence": 74.3,
@@ -79,7 +82,7 @@ def test_dashboard_page_renders_responsive(live_server):
     assert response.status_code == 200
     html = response.text
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
-    assert "Classroom Dashboard" in html
+    assert "แดชบอร์ดติดตามการเรียน" in html
     assert "window-days" in html
 
 
@@ -133,6 +136,7 @@ def test_ingest_result_then_report_e2e(live_server):
     assert runtime["state_counts"]["ไม่ตั้งใจเรียน"] == 1
     first_runtime_student = runtime["current_students"][0]
     assert "name" in first_runtime_student
+    assert "student_code" in first_runtime_student
     assert "state" in first_runtime_student
 
 

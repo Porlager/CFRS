@@ -129,9 +129,11 @@ celerybeat.pid
 
 # Environments
 .env
-.venv
+.venv/
+.venv*/
 env/
 venv/
+venv*/
 ENV/
 env.bak/
 venv.bak/
@@ -185,11 +187,6 @@ cython_debug/
 # Local runtime and cache artifacts
 data/
 storage/
-
-# Local virtual environments
-venv310/
-venv_new/
-.venv310uv/
 
 # Copilot/agent skills
 .github/skills/

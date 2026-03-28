@@ -103,7 +103,8 @@ CFRS/
 |- storage/                # latest_frame.jpg สำหรับหน้า dashboard
 |- tests/
 |  `- test_dashboard_e2e.py
-|- run_dashboard.ps1       # สคริปต์รัน full stack / dashboard-only
+|- run_dashboard.py        # สคริปต์รัน cross-platform (Linux/macOS/Windows)
+|- run_dashboard.ps1       # สคริปต์รัน full stack / dashboard-only (PowerShell)
 `- run_e2e_tests.ps1       # สคริปต์รันทดสอบ end-to-end
 ```
 
@@ -113,14 +114,14 @@ CFRS/
 
 ### 1) ติดตั้ง dependencies
 
-```powershell
-py -3 -m pip install -r requirements.txt
+```bash
+python -m pip install -r requirements.txt
 ```
 
 ### 2) รันระบบแบบครบชุด
 
-```powershell
-./run_dashboard.ps1
+```bash
+python run_dashboard.py
 ```
 
 สิ่งที่จะได้ทันที
@@ -135,20 +136,64 @@ py -3 -m pip install -r requirements.txt
 
 | โหมด | คำสั่ง | ใช้เมื่อ |
 | --- | --- | --- |
-| Full Stack | `./run_dashboard.ps1` | ใช้งานจริงหรือเดโมแบบครบระบบ |
-| Dashboard Only | `./run_dashboard.ps1 -DashboardOnly` | ทดสอบหน้าเว็บ/รายงานโดยไม่เปิดกล้อง |
-| Direct Flask | `py -3 dashboard_api.py` | รัน API ตรงสำหรับ debug |
+| Full Stack (Cross-platform) | `python run_dashboard.py` | ใช้งานจริงหรือเดโมแบบครบระบบ (Linux/macOS/Windows) |
+| Dashboard Only (Cross-platform) | `python run_dashboard.py --dashboard-only` | ทดสอบหน้าเว็บ/รายงานโดยไม่เปิดกล้อง |
+| Full Stack (PowerShell) | `./run_dashboard.ps1` | ทางเลือกเดิมสำหรับ Windows PowerShell |
+| Dashboard Only (PowerShell) | `./run_dashboard.ps1 -DashboardOnly` | ทางเลือกเดิมสำหรับ Windows PowerShell |
+| Direct Flask | `python dashboard_api.py` | รัน API ตรงสำหรับ debug |
+
+> หมายเหตุ (macOS): ถ้า port `5000` ถูกใช้งาน (เช่น AirPlay Receiver) `dashboard_api.py` จะเลื่อนไปใช้พอร์ตถัดไปอัตโนมัติ เช่น `5001`, `5002` และจะแจ้งใน console
 
 ### ใช้มือถือเป็น IP Camera
 
 รองรับแล้วผ่านตัวแปร `CFRS_CAMERA_SOURCE` โดยใส่ URL จากแอปมือถือ เช่น IP Webcam
 
-```powershell
-$env:CFRS_CAMERA_SOURCE = "http://192.168.1.105:8080/video"
-./run_dashboard.ps1
+```bash
+CFRS_CAMERA_SOURCE="http://192.168.1.105:8080/video" python run_dashboard.py
 ```
 
 ถ้าใส่แค่ base URL เช่น `http://192.168.1.105:8080` ระบบจะลองเติม `/video` ให้อัตโนมัติ
+
+### เลือกกล้องในคอมแบบ Choice Option
+
+`main.py` รองรับการเลือกกล้องจากรายการที่ตรวจพบได้แล้ว (interactive choice)
+
+```bash
+source .venv/bin/activate
+CFRS_CAMERA_SOURCE=ask python main.py
+```
+
+พฤติกรรมที่รองรับ
+
+- จะแสดงรายการ camera index ที่หาเจอ แล้วให้เลือกเลข
+- กด Enter ได้เพื่อใช้ค่า default (ตัวแรก)
+- หากไม่ตั้งค่า `CFRS_CAMERA_SOURCE` ระบบจะพยายามเลือกตัวแรกให้อัตโนมัติ
+
+ตัวแปรที่เกี่ยวข้อง
+
+- `CFRS_CAMERA_SOURCE=ask` บังคับให้ถามเลือกกล้อง
+- `CFRS_CAMERA_SOURCE=<index>` เลือกกล้องตรง เช่น `0`, `1`
+- `CFRS_CAMERA_CHOICE=0` ปิด interactive prompt
+- `CFRS_CAMERA_SCAN_MAX=6` จำนวน index สูงสุดที่ใช้สแกนกล้อง
+
+### โหมดติดตามนักศึกษาแม่นขึ้น + ลื่นขึ้น
+
+ระบบตอนนี้รองรับการสืบทอด `student_code` และชื่อจาก track เดิม เมื่อหน้าโดนบัง/หายชั่วคราว แล้วกลับมาได้ต่อเนื่อง
+
+- ถ้าไฟล์ `known_faces` ตั้งชื่อแบบ `รหัสนักศึกษา_ชื่อ.jpg` เช่น `66051281_Apirak.jpg` ระบบจะดึงรหัสนศ.มาใช้ทันที
+- payload จะส่ง `student_code` ไป backend เพื่อช่วย mapping ตัวตนและลดการสลับชื่อ
+- มี state smoothing เพื่อลดการแกว่งของสถานะพฤติกรรมเฟรมต่อเฟรม
+- มี body posture fallback แยก `ฟุบหลับ/นอน` กับ `หันหลัง/ไม่ตั้งใจ` ตามสัดส่วนกรอบตัว
+- การส่งผลไป backend เป็น async queue ลดโอกาสแลคจาก network delay
+
+ตัวแปรปรับจูนใหม่
+
+- `CFRS_STATE_SMOOTHING_WINDOW=6` จำนวนเฟรมสำหรับโหวตสถานะ
+- `CFRS_BODY_LYING_RATIO=1.08` ยิ่งสูง ยิ่งจับนอนง่ายขึ้น
+- `CFRS_BODY_SLOUCH_RATIO=1.45` ยิ่งสูง ยิ่งจัดเป็นหันหลัง/ไม่ตั้งใจง่ายขึ้น
+- `CFRS_POST_TIMEOUT_SEC=1.2` timeout ส่ง payload ต่อครั้ง
+- `CFRS_POST_QUEUE_SIZE=4` ขนาดคิว payload แบบ async
+- `CFRS_STUDENT_DIR_REFRESH_SEC=20` ความถี่รีเฟรช mapping นักศึกษาจากฐานข้อมูล
 
 ---
 
@@ -189,6 +234,9 @@ $env:CFRS_CAMERA_SOURCE = "http://192.168.1.105:8080/video"
 | เร่ง inference | `CFRS_FRAME_RESIZE_SCALE` | ลดสเกล เช่น 0.42 หรือ 0.40 |
 | ปรับความไว inattentive | `CFRS_POSE_INATTENTIVE_PENALTY` | ลดค่า = ไวขึ้น, เพิ่มค่า = เข้มขึ้น |
 | ปรับความไวหลับ/เหม่อ | `CFRS_EAR_THRESH` | เพิ่มค่า = จัดเป็นง่วงง่ายขึ้น |
+| ลดการแกว่งสถานะ | `CFRS_STATE_SMOOTHING_WINDOW` | เพิ่มค่าเพื่อให้สถานะนิ่งขึ้น |
+| ปรับเกณฑ์ท่านอน | `CFRS_BODY_LYING_RATIO` | เพิ่มค่าเพื่อจับท่านอนได้ไวขึ้น |
+| ปรับเกณฑ์หันหลัง | `CFRS_BODY_SLOUCH_RATIO` | เพิ่มค่าเพื่อตีความ inattentive ง่ายขึ้น |
 
 ค่าตั้งต้นที่ใช้อยู่ในสคริปต์
 
@@ -197,6 +245,7 @@ $env:CFRS_CAMERA_SOURCE = "http://192.168.1.105:8080/video"
 - `CFRS_BODY_RESIZE_SCALE=0.4`
 - `CFRS_CAMERA_WIDTH=640`, `CFRS_CAMERA_HEIGHT=480`
 - `CFRS_FRAME_WRITE_INTERVAL_SEC=0.45`
+- `CFRS_STATE_SMOOTHING_WINDOW=6`
 
 ---
 
@@ -208,8 +257,8 @@ $env:CFRS_CAMERA_SOURCE = "http://192.168.1.105:8080/video"
 
 หรือ
 
-```powershell
-py -3 -m pytest
+```bash
+python -m pytest
 ```
 
 ---
@@ -226,14 +275,21 @@ py -3 -c "import flask, requests, cv2, face_recognition"
 
 ถ้ายังไม่ครบให้ติดตั้ง
 
-```powershell
-py -3 -m pip install -r requirements.txt
+```bash
+python -m pip install -r requirements.txt
 ```
 
 ### หน้า dashboard ไม่ขึ้นภาพกล้อง
 
-- ใช้โหมด full stack: `./run_dashboard.ps1`
+- ใช้โหมด full stack: `python run_dashboard.py`
 - ตรวจว่าไฟล์ `storage/latest_frame.jpg` ถูกอัปเดตต่อเนื่อง
+
+### Port 5000 ถูกใช้งาน (macOS)
+
+- ระบบรองรับ fallback พอร์ตอัตโนมัติแล้ว (จาก `5000` ไปพอร์ตถัดไปที่ว่าง)
+- ถ้าต้องการกำหนดเอง: `CFRS_PORT=5001 python dashboard_api.py`
+- ถ้าไม่ต้องการ fallback อัตโนมัติ: `CFRS_PORT_AUTO_FALLBACK=0`
+- ปรับช่วงสแกน fallback ได้ด้วย `CFRS_PORT_FALLBACK_RANGE` (default: `20`)
 
 ### ลงทะเบียนแล้วไม่รู้จักหน้าทันที
 

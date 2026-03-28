@@ -52,11 +52,11 @@
   function setApiState(ok) {
     if (!els.apiStatus) return;
     if (ok) {
-      els.apiStatus.textContent = "Online";
+      els.apiStatus.textContent = "เชื่อมต่อแล้ว";
       els.apiStatus.classList.remove("bad");
       els.apiStatus.classList.add("ok");
     } else {
-      els.apiStatus.textContent = "Offline";
+      els.apiStatus.textContent = "ขาดการเชื่อมต่อ";
       els.apiStatus.classList.remove("ok");
       els.apiStatus.classList.add("bad");
     }
@@ -99,16 +99,36 @@
 
   function classifyState(state) {
     const normalized = String(state || "").toLowerCase();
-    if (normalized.includes("ไม่ตั้งใจ") || normalized.includes("inattentive") || normalized.includes("away")) {
+    if (
+      normalized.includes("ไม่ตั้งใจ") ||
+      normalized.includes("หันหลัง") ||
+      normalized.includes("inattentive") ||
+      normalized.includes("away")
+    ) {
       return "inattentive";
     }
-    if (normalized.includes("หลับ") || normalized.includes("เหม่อ") || normalized.includes("drowsy") || normalized.includes("sleep")) {
+    if (
+      normalized.includes("หลับ") ||
+      normalized.includes("เหม่อ") ||
+      normalized.includes("ง่วง") ||
+      normalized.includes("นอน") ||
+      normalized.includes("drowsy") ||
+      normalized.includes("sleep")
+    ) {
       return "drowsy";
     }
     if (normalized.includes("ตั้งใจ") || normalized.includes("attentive")) {
       return "attentive";
     }
     return "unknown";
+  }
+
+  function translateState(state) {
+    const bucket = classifyState(state);
+    if (bucket === "attentive") return "ตั้งใจเรียน";
+    if (bucket === "inattentive") return "ไม่ตั้งใจ";
+    if (bucket === "drowsy") return "ง่วง/ฟุบ";
+    return "ไม่ระบุสถานะ";
   }
 
   async function loadDashboard() {
@@ -162,15 +182,18 @@
         const rows = currentStudents.map((s) => {
           const stateClass = classifyState(s.state);
           const confidenceText = s.confidence == null ? "-" : `${Number(s.confidence).toFixed(1)}%`;
-          const trackLabel = s.track_id == null ? "track:-" : `track:${s.track_id}`;
-          const verifyLabel = s.confirmed ? "confirmed" : "tracking";
+          const trackLabel = s.track_id == null ? "รหัสติดตาม:-" : `รหัสติดตาม:${s.track_id}`;
+          const studentLabel = s.student_code ? `รหัสนศ.:${escapeHtml(s.student_code)}` : "รหัสนศ.:-";
+          const verifyLabel = s.confirmed ? "ยืนยันแล้ว" : "กำลังติดตาม";
+          const thState = translateState(s.state);
+          
           return `
             <div class="live-student-row">
               <div>
-                <div class="live-student-name">${escapeHtml(s.name || "Unknown")}</div>
-                <div class="live-student-meta">${trackLabel} | conf:${confidenceText} | ${verifyLabel}</div>
+                <div class="live-student-name">${escapeHtml(s.name || "ไม่ทราบชื่อ")}</div>
+                <div class="live-student-meta">${studentLabel} | ${trackLabel} | ความมั่นใจ:${confidenceText} | ${verifyLabel}</div>
               </div>
-              <div><span class="state-badge ${stateClass}">${escapeHtml(s.state || "ไม่ทราบสถานะ")}</span></div>
+              <div><span class="state-badge ${stateClass}">${thState}</span></div>
               <div class="live-student-meta">${escapeHtml(formatDateTime(runtime.timestamp))}</div>
             </div>
           `;
@@ -183,8 +206,8 @@
     els.latestCheckinName.textContent = latest ? latest.full_name : "ยังไม่มีการเช็คชื่อ";
     els.latestCheckinTime.textContent = latest ? formatDateTime(latest.first_seen_at) : "-";
     els.latestCheckinConfidence.textContent = latest
-      ? `Confidence: ${latest.confidence == null ? "-" : `${Number(latest.confidence).toFixed(1)}%`}`
-      : "Confidence: -";
+      ? `ความมั่นใจ: ${latest.confidence == null ? "-" : `${Number(latest.confidence).toFixed(1)}%`}`
+      : "ความมั่นใจ: -";
 
     const todayList = data.attendance_today_list || [];
     els.attendanceChipList.innerHTML =
@@ -229,7 +252,10 @@
       dist.length === 0
         ? `<div class="state-row"><span>ยังไม่มีข้อมูลวันนี้</span><strong>0</strong></div>`
         : dist
-            .map((s) => `<div class="state-row"><span>${s.state}</span><strong>${s.total}</strong></div>`)
+            .map((s) => {
+              const translatedState = translateState(s.state);
+              return `<div class="state-row"><span>${translatedState}</span><strong>${s.total}</strong></div>`;
+            })
             .join("");
 
     const keyword = (els.search.value || "").trim().toLowerCase();

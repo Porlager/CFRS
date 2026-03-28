@@ -16,8 +16,16 @@ UNKNOWN_NAMES = {
 DROWSY_STATES = {
     "หลับ/เหม่อ",
     "ฟุบหลับ/หันหลัง",
+    "ฟุบหลับ/นอน",
     "drowsy",
     "sleeping",
+}
+
+INATTENTIVE_STATES = {
+    "ไม่ตั้งใจเรียน",
+    "หันหลัง/ไม่ตั้งใจ",
+    "inattentive",
+    "looking_away",
 }
 
 
@@ -46,6 +54,24 @@ class AttendanceRepository:
         return " ".join(full_name.strip().split())
 
     @staticmethod
+    def _normalize_student_code(student_code: Optional[str]) -> Optional[str]:
+        code = str(student_code or "").strip()
+        return code or None
+
+    @staticmethod
+    def _state_bucket(state: Optional[str]) -> str:
+        normalized = str(state or "").strip().lower()
+        if not normalized:
+            return "unknown"
+        if any(k in normalized for k in ("หลับ", "ง่วง", "drowsy", "sleep", "ฟุบ", "นอน")):
+            return "drowsy"
+        if any(k in normalized for k in ("ไม่ตั้งใจ", "inattentive", "away", "looking_away", "หันหลัง")):
+            return "inattentive"
+        if "ไม่ตั้งใจ" not in normalized and ("ตั้งใจ" in normalized or "attentive" in normalized):
+            return "attentive"
+        return "unknown"
+
+    @staticmethod
     def _split_name(full_name: str) -> Tuple[str, str]:
         parts = full_name.split(" ", 1)
         first_name = parts[0]
@@ -71,28 +97,74 @@ class AttendanceRepository:
 
     def upsert_student(self, full_name: str, student_code: Optional[str] = None) -> int:
         normalized = self._normalize_name(full_name)
-        if not normalized:
+        normalized_code = self._normalize_student_code(student_code)
+        if not normalized and not normalized_code:
             raise ValueError("full_name is required")
+
+        if not normalized and normalized_code:
+            normalized = normalized_code
 
         now_iso = datetime.now().isoformat(timespec="seconds")
         first_name, last_name = self._split_name(normalized)
 
         with self._lock:
-            row = self._conn.execute(
+            row_by_code = None
+            if normalized_code:
+                row_by_code = self._conn.execute(
+                    """
+                    SELECT id, full_name, student_code
+                    FROM students
+                    WHERE student_code = ?
+                    LIMIT 1
+                    """,
+                    (normalized_code,),
+                ).fetchone()
+
+            row_by_name = self._conn.execute(
                 "SELECT id FROM students WHERE full_name = ?",
                 (normalized,),
             ).fetchone()
-            if row:
+
+            if row_by_code and row_by_name and int(row_by_code["id"]) != int(row_by_name["id"]):
+                target_id = int(row_by_code["id"])
+                target_name = self._normalize_name(str(row_by_code["full_name"] or "")) or normalized
+                target_code = self._normalize_student_code(row_by_code["student_code"]) or normalized_code
+                first_name, last_name = self._split_name(target_name)
                 self._conn.execute(
                     """
                     UPDATE students
                     SET student_code = COALESCE(?, student_code),
                         first_name = ?,
                         last_name = ?,
+                        full_name = ?,
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (student_code, first_name, last_name, now_iso, row["id"]),
+                    (target_code, first_name, last_name, target_name, now_iso, target_id),
+                )
+                self._conn.commit()
+                return target_id
+
+            row = row_by_code or row_by_name
+            if row:
+                target_name = normalized
+                target_code = normalized_code
+                if row_by_code and not normalized:
+                    target_name = self._normalize_name(str(row_by_code["full_name"] or "")) or normalized_code
+                if row_by_code and not target_code:
+                    target_code = self._normalize_student_code(row_by_code["student_code"])
+                first_name, last_name = self._split_name(target_name)
+                self._conn.execute(
+                    """
+                    UPDATE students
+                    SET student_code = COALESCE(?, student_code),
+                        first_name = ?,
+                        last_name = ?,
+                        full_name = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (target_code, first_name, last_name, target_name, now_iso, row["id"]),
                 )
                 self._conn.commit()
                 return int(row["id"])
@@ -104,7 +176,7 @@ class AttendanceRepository:
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (student_code, first_name, last_name, normalized, now_iso, now_iso),
+                (normalized_code, first_name, last_name, normalized, now_iso, now_iso),
             )
             self._conn.commit()
             return int(cursor.lastrowid)
@@ -112,22 +184,27 @@ class AttendanceRepository:
     def auto_save_attendance(
         self,
         full_name: str,
+        student_code: Optional[str] = None,
         timestamp: Optional[str] = None,
         confidence: Optional[float] = None,
         track_id: Optional[int] = None,
         source: str = "ai-confirmed",
     ) -> Dict[str, Any]:
         normalized = self._normalize_name(full_name)
-        if not self._is_real_name(normalized):
+        normalized_code = self._normalize_student_code(student_code)
+        if not self._is_real_name(normalized) and not normalized_code:
             return {
                 "saved": False,
                 "reason": "ignored_non_student_name",
                 "full_name": normalized,
             }
 
+        if not normalized and normalized_code:
+            normalized = normalized_code
+
         ts_iso = self._safe_iso(timestamp)
         attendance_date = self._date_of(ts_iso)
-        student_id = self.upsert_student(normalized)
+        student_id = self.upsert_student(normalized, student_code=normalized_code)
         now_iso = datetime.now().isoformat(timespec="seconds")
 
         with self._lock:
@@ -145,6 +222,7 @@ class AttendanceRepository:
                     "reason": "already_saved_today",
                     "student_id": student_id,
                     "full_name": normalized,
+                    "student_code": normalized_code,
                     "first_seen_at": existing["first_seen_at"],
                 }
 
@@ -164,6 +242,7 @@ class AttendanceRepository:
             "attendance_id": int(cursor.lastrowid),
             "student_id": student_id,
             "full_name": normalized,
+            "student_code": normalized_code,
             "attendance_date": attendance_date,
             "first_seen_at": ts_iso,
         }
@@ -172,19 +251,25 @@ class AttendanceRepository:
         self,
         full_name: Optional[str],
         state: str,
+        student_code: Optional[str] = None,
         timestamp: Optional[str] = None,
         confidence: Optional[float] = None,
         track_id: Optional[int] = None,
         source: str = "ai",
     ) -> int:
         normalized = self._normalize_name(full_name)
+        normalized_code = self._normalize_student_code(student_code)
         ts_iso = self._safe_iso(timestamp)
         now_iso = datetime.now().isoformat(timespec="seconds")
-        is_drowsy = 1 if state in DROWSY_STATES else 0
+        state_bucket = self._state_bucket(state)
+        is_drowsy = 1 if state_bucket == "drowsy" else 0
 
         student_id = None
-        if self._is_real_name(normalized):
-            student_id = self.upsert_student(normalized)
+        if self._is_real_name(normalized) or normalized_code:
+            student_id = self.upsert_student(
+                normalized if self._is_real_name(normalized) else (normalized_code or normalized),
+                student_code=normalized_code,
+            )
 
         with self._lock:
             cursor = self._conn.execute(
@@ -209,6 +294,7 @@ class AttendanceRepository:
 
         for item in students:
             name = self._normalize_name(str(item.get("name", "")))
+            student_code = self._normalize_student_code(item.get("student_code"))
             state = str(item.get("state", "ไม่ทราบสถานะ"))
             confirmed = bool(item.get("confirmed", False))
             track_id = item.get("track_id")
@@ -217,6 +303,7 @@ class AttendanceRepository:
             self.save_behavior_status(
                 full_name=name if self._is_real_name(name) else None,
                 state=state,
+                student_code=student_code,
                 timestamp=ts,
                 confidence=confidence,
                 track_id=track_id,
@@ -224,9 +311,11 @@ class AttendanceRepository:
             )
             behavior_saved += 1
 
-            if confirmed and self._is_real_name(name):
+            if confirmed and (self._is_real_name(name) or student_code):
+                candidate_name = name if self._is_real_name(name) else (student_code or "")
                 result = self.auto_save_attendance(
-                    full_name=name,
+                    full_name=candidate_name,
+                    student_code=student_code,
                     timestamp=ts,
                     confidence=confidence,
                     track_id=track_id,

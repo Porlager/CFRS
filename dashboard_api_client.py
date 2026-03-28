@@ -54,8 +54,8 @@ def call_send_sample_result(base_url: str):
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "person_count": 3,
         "students": [
-            {"track_id": 1, "name": "SOMCHAI JAIDEE", "state": "ตั้งใจเรียน", "confirmed": True, "confidence": 97.4},
-            {"track_id": 2, "name": "SUDAPORN DEEDEE", "state": "หลับ/เหม่อ", "confirmed": True, "confidence": 90.2},
+            {"track_id": 1, "name": "SOMCHAI JAIDEE", "student_code": "66051281", "state": "ตั้งใจเรียน", "confirmed": True, "confidence": 97.4},
+            {"track_id": 2, "name": "SUDAPORN DEEDEE", "student_code": "66051282", "state": "หลับ/เหม่อ", "confirmed": True, "confidence": 90.2},
             {"track_id": 3, "name": "คนแปลกหน้า", "state": "ฟุบหลับ/หันหลัง", "confirmed": False, "confidence": 0.0},
         ],
     }

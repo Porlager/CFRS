@@ -1,5 +1,6 @@
 numpy
 opencv-contrib-python
+face_recognition
 ultralytics
 mediapipe
 scipy
