@@ -195,6 +195,27 @@ CFRS_CAMERA_SOURCE=ask python main.py
 - `CFRS_POST_QUEUE_SIZE=4` ขนาดคิว payload แบบ async
 - `CFRS_STUDENT_DIR_REFRESH_SEC=20` ความถี่รีเฟรช mapping นักศึกษาจากฐานข้อมูล
 
+### โหมดลดแลค OpenCV (เน้นเครื่องสเปกต่ำ)
+
+ถ้าต้องการลด lag แบบหนัก (เน้นความลื่นก่อน) ใช้ค่าพวกนี้:
+
+```bash
+CFRS_FRAME_RESIZE_SCALE=0.34 \
+CFRS_PROCESS_EVERY_N_FRAMES=6 \
+CFRS_FACE_DETECTION_COOLDOWN_FRAMES=10 \
+CFRS_BODY_DETECT_EVERY_N_FRAMES=8 \
+CFRS_RUNTIME_NUM_JITTERS=0 \
+CFRS_PREVIEW_DOWNSCALE=0.70 \
+CFRS_CV_THREADS=2 \
+python run_dashboard.py
+```
+
+หลักการของโหมดนี้
+
+- ลดความถี่ face detection ลงอย่างชัดเจน
+- ให้ body detection ทำงานเด่นขึ้นเมื่อหน้า "หาย" จากเฟรม
+- ใช้ latest-frame reader แบบ drop frame เพื่อตัดเฟรมเก่าทิ้ง ลดภาพหน่วงค้าง
+
 ---
 
 ## Register Flow
@@ -232,20 +253,27 @@ CFRS_CAMERA_SOURCE=ask python main.py
 | เพิ่ม FPS | `CFRS_PROCESS_EVERY_N_FRAMES` | เพิ่มค่าเป็น 4-5 บนเครื่องสเปกต่ำ |
 | ลดภาระ body detect | `CFRS_BODY_DETECT_EVERY_N_FRAMES` | เพิ่มค่าเป็น 5-6 |
 | เร่ง inference | `CFRS_FRAME_RESIZE_SCALE` | ลดสเกล เช่น 0.42 หรือ 0.40 |
+| เน้นลื่นสุด | `CFRS_RUNTIME_NUM_JITTERS` | ตั้ง `0` เพื่อลดภาระ face encoding |
 | ปรับความไว inattentive | `CFRS_POSE_INATTENTIVE_PENALTY` | ลดค่า = ไวขึ้น, เพิ่มค่า = เข้มขึ้น |
 | ปรับความไวหลับ/เหม่อ | `CFRS_EAR_THRESH` | เพิ่มค่า = จัดเป็นง่วงง่ายขึ้น |
 | ลดการแกว่งสถานะ | `CFRS_STATE_SMOOTHING_WINDOW` | เพิ่มค่าเพื่อให้สถานะนิ่งขึ้น |
 | ปรับเกณฑ์ท่านอน | `CFRS_BODY_LYING_RATIO` | เพิ่มค่าเพื่อจับท่านอนได้ไวขึ้น |
 | ปรับเกณฑ์หันหลัง | `CFRS_BODY_SLOUCH_RATIO` | เพิ่มค่าเพื่อตีความ inattentive ง่ายขึ้น |
+| ลด face detect ตอนคนหาย | `CFRS_FACE_DETECTION_COOLDOWN_FRAMES` | เพิ่มค่าเพื่อลดภาระเมื่อไม่มีใบหน้า |
+| body trigger หลังหน้าหาย | `CFRS_FACE_MISSING_BODY_GRACE_FRAMES` | ยิ่งน้อย ยิ่ง trigger body เร็ว |
+| ลดหน่วงหน้าต่างแสดงผล | `CFRS_PREVIEW_DOWNSCALE` | ลดขนาด preview ให้ render เร็วขึ้น |
 
 ค่าตั้งต้นที่ใช้อยู่ในสคริปต์
 
-- `CFRS_PROCESS_EVERY_N_FRAMES=3`
-- `CFRS_BODY_DETECT_EVERY_N_FRAMES=4`
-- `CFRS_BODY_RESIZE_SCALE=0.4`
+- `CFRS_PROCESS_EVERY_N_FRAMES=5`
+- `CFRS_FACE_DETECTION_COOLDOWN_FRAMES=10`
+- `CFRS_BODY_DETECT_EVERY_N_FRAMES=7`
+- `CFRS_BODY_RESIZE_SCALE=0.35`
 - `CFRS_CAMERA_WIDTH=640`, `CFRS_CAMERA_HEIGHT=480`
 - `CFRS_FRAME_WRITE_INTERVAL_SEC=0.45`
 - `CFRS_STATE_SMOOTHING_WINDOW=6`
+- `CFRS_RUNTIME_NUM_JITTERS=0`
+- `CFRS_PREVIEW_DOWNSCALE=0.72`
 
 ---
 

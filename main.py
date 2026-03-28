@@ -236,6 +236,51 @@ class AsyncPayloadPoster:
         self._worker.join(timeout=2.0)
 
 
+class LatestFrameReader:
+    def __init__(self, cap, max_idle_sec: float = 2.0):
+        self.cap = cap
+        self.max_idle_sec = max(0.5, float(max_idle_sec))
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._latest_frame = None
+        self._last_ok_time = 0.0
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            with self._lock:
+                self._latest_frame = frame
+                self._last_ok_time = time.time()
+
+    def read(self):
+        with self._lock:
+            frame = None if self._latest_frame is None else self._latest_frame.copy()
+            last_ok_time = self._last_ok_time
+
+        if frame is None:
+            return False, None
+
+        if last_ok_time and (time.time() - last_ok_time) > self.max_idle_sec:
+            return False, None
+        return True, frame
+
+    def close(self):
+        self._stop_event.set()
+        self._worker.join(timeout=1.5)
+
+
+def _configure_opencv_runtime():
+    cv2.setUseOptimized(True)
+    requested_threads = int(os.getenv("CFRS_CV_THREADS", "2"))
+    requested_threads = max(1, min(8, requested_threads))
+    cv2.setNumThreads(requested_threads)
+
+
 def _write_dashboard_frame(frame_output_path, jpeg_bytes):
     tmp_path = f"{frame_output_path}.tmp"
 
@@ -276,6 +321,8 @@ class ClassroomFacialRecognitionService:
         self.BLUR_FACE_RATIO = 800.0
         self.EAR_THRESH = float(os.getenv("CFRS_EAR_THRESH", "0.20"))
         self.POSE_INATTENTIVE_PENALTY = float(os.getenv("CFRS_POSE_INATTENTIVE_PENALTY", "0.06"))
+        self.RUNTIME_NUM_JITTERS = int(os.getenv("CFRS_RUNTIME_NUM_JITTERS", "0"))
+        self.RUNTIME_NUM_JITTERS = max(0, min(2, self.RUNTIME_NUM_JITTERS))
         self.body_detector = cv2.HOGDescriptor()
         self.body_detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self._load_and_encode_database()
@@ -421,7 +468,11 @@ class ClassroomFacialRecognitionService:
         rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
         face_locations = face_recognition.face_locations(rgb_small, model="hog")
-        face_encodings = face_recognition.face_encodings(rgb_small, face_locations, num_jitters=1)
+        face_encodings = face_recognition.face_encodings(
+            rgb_small,
+            face_locations,
+            num_jitters=self.RUNTIME_NUM_JITTERS,
+        )
         all_face_landmarks = face_recognition.face_landmarks(rgb_small, face_locations)
 
         detections = []
@@ -654,6 +705,7 @@ def _open_camera_from_env():
 
 
 if __name__ == "__main__":
+    _configure_opencv_runtime()
     service = ClassroomFacialRecognitionService()
     try:
         cap, camera_source_used = _open_camera_from_env()
@@ -667,9 +719,9 @@ if __name__ == "__main__":
     frame_resize_scale = float(os.getenv("CFRS_FRAME_RESIZE_SCALE", "0.5"))
     frame_resize_scale = max(0.35, min(1.0, frame_resize_scale))
     process_every_n_frames = int(os.getenv("CFRS_PROCESS_EVERY_N_FRAMES", "3"))
-    process_every_n_frames = max(1, min(6, process_every_n_frames))
+    process_every_n_frames = max(1, min(12, process_every_n_frames))
     body_detect_every_n_frames = int(os.getenv("CFRS_BODY_DETECT_EVERY_N_FRAMES", "4"))
-    body_detect_every_n_frames = max(1, min(8, body_detect_every_n_frames))
+    body_detect_every_n_frames = max(1, min(16, body_detect_every_n_frames))
     body_resize_scale = float(os.getenv("CFRS_BODY_RESIZE_SCALE", "0.45"))
     body_resize_scale = max(0.25, min(0.8, body_resize_scale))
     body_match_max_distance = int(os.getenv("CFRS_BODY_MATCH_MAX_DISTANCE", "190"))
@@ -687,6 +739,17 @@ if __name__ == "__main__":
     body_lying_ratio = float(os.getenv("CFRS_BODY_LYING_RATIO", "1.08"))
     body_slouch_ratio = float(os.getenv("CFRS_BODY_SLOUCH_RATIO", "1.45"))
     student_dir_refresh_sec = float(os.getenv("CFRS_STUDENT_DIR_REFRESH_SEC", "20"))
+    face_missing_body_grace_frames = int(os.getenv("CFRS_FACE_MISSING_BODY_GRACE_FRAMES", "2"))
+    face_missing_body_grace_frames = max(1, min(10, face_missing_body_grace_frames))
+    face_detection_cooldown_frames = int(os.getenv("CFRS_FACE_DETECTION_COOLDOWN_FRAMES", "6"))
+    face_detection_cooldown_frames = max(2, min(20, face_detection_cooldown_frames))
+    no_face_interval_boost_frames = int(os.getenv("CFRS_NO_FACE_INTERVAL_BOOST_FRAMES", "2"))
+    no_face_interval_boost_frames = max(0, min(8, no_face_interval_boost_frames))
+    frame_reader_idle_sec = float(os.getenv("CFRS_FRAME_READER_IDLE_SEC", "2.0"))
+    preview_downscale = float(os.getenv("CFRS_PREVIEW_DOWNSCALE", "0.85"))
+    preview_downscale = max(0.45, min(1.0, preview_downscale))
+    max_empty_reads = int(os.getenv("CFRS_MAX_EMPTY_READS", "120"))
+    max_empty_reads = max(20, min(600, max_empty_reads))
     last_post_time = 0.0
     last_frame_write_time = 0.0
     last_frame_error_time = 0.0
@@ -701,6 +764,7 @@ if __name__ == "__main__":
 
     tracked_faces = {}
     next_track_id = 0
+    frame_reader = LatestFrameReader(cap, max_idle_sec=frame_reader_idle_sec)
     
     confirmed_student_codes = set()
     confirmed_names_db = set()
@@ -716,21 +780,33 @@ if __name__ == "__main__":
     CONFIRMATION_TIME = 5.0
     TIMEOUT = 10.0
     MAX_DISTANCE = 50
+    empty_reads = 0
 
     try:
         while True:
-            ret, frame = cap.read()
+            ret, frame = frame_reader.read()
             if not ret:
-                break
+                empty_reads += 1
+                if empty_reads >= max_empty_reads:
+                    print(f"[{datetime.now()}] WARN: Camera stream not receiving frames. Exiting camera loop.")
+                    break
+                time.sleep(0.01)
+                continue
+            empty_reads = 0
 
             current_time = time.time()
             frame_index += 1
-            should_run_heavy = (frame_index % process_every_n_frames == 1) or (not cached_results)
+            has_face_recently = len(cached_results) > 0
+            if has_face_recently:
+                heavy_interval = process_every_n_frames
+            else:
+                heavy_interval = min(face_detection_cooldown_frames, process_every_n_frames + no_face_interval_boost_frames)
+            should_run_heavy = (frame_index % heavy_interval == 1) or (not cached_results)
             if should_run_heavy:
                 cached_results = service.process_frame(frame, resize_scale=frame_resize_scale)
             results = cached_results
 
-            should_run_body = (frame_index % body_detect_every_n_frames == 1) or (not cached_body_boxes)
+            should_run_body = (len(results) == 0) or (frame_index % body_detect_every_n_frames == 1) or (not cached_body_boxes)
             if should_run_body:
                 cached_body_boxes = service.detect_bodies(frame, resize_scale=body_resize_scale)
             body_boxes = cached_body_boxes
@@ -872,6 +948,7 @@ if __name__ == "__main__":
                     )
                     if payload_track_id is not None:
                         seen_track_ids.add(payload_track_id)
+                        tracked_faces[payload_track_id]["face_missing_frames"] = 0
 
                     state_bucket = classify_state_bucket(payload_state)
                     if state_bucket == "drowsy":
@@ -909,6 +986,10 @@ if __name__ == "__main__":
                         continue
 
                     t_data = tracked_faces[best_track_id]
+                    missing_frames = int(t_data.get("face_missing_frames", 0)) + 1
+                    t_data["face_missing_frames"] = missing_frames
+                    if missing_frames < face_missing_body_grace_frames:
+                        continue
                     t_data["centroid"] = (body_cx, body_cy)
                     t_data["last_seen"] = current_time
                     seen_track_ids.add(best_track_id)
@@ -992,10 +1073,14 @@ if __name__ == "__main__":
                         print(f"[{datetime.now()}] WARN: Cannot write camera frame for dashboard: {exc}")
                         last_frame_error_time = current_time
 
-            cv2.imshow('Ultimate Classroom Identity (Tracker Lock)', frame)
+            frame_to_show = frame
+            if preview_downscale < 0.999:
+                frame_to_show = cv2.resize(frame, (0, 0), fx=preview_downscale, fy=preview_downscale)
+            cv2.imshow('Ultimate Classroom Identity (Tracker Lock)', frame_to_show)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
     finally:
+        frame_reader.close()
         payload_poster.close()
         cap.release()
         cv2.destroyAllWindows()
