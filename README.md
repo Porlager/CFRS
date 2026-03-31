@@ -115,8 +115,13 @@ CFRS/
 ### 1) ติดตั้ง dependencies
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+> บน macOS + Homebrew Python อาจเจอ `externally-managed-environment` (PEP 668) หากติดตั้งนอก venv  
+> วิธีที่แนะนำคือใช้ virtual environment ตามคำสั่งด้านบน
 
 ### 2) รันระบบแบบครบชุด
 
@@ -191,6 +196,20 @@ CFRS_CAMERA_SOURCE=ask python main.py
 - `CFRS_STATE_SMOOTHING_WINDOW=6` จำนวนเฟรมสำหรับโหวตสถานะ
 - `CFRS_BODY_LYING_RATIO=1.08` ยิ่งสูง ยิ่งจับนอนง่ายขึ้น
 - `CFRS_BODY_SLOUCH_RATIO=1.45` ยิ่งสูง ยิ่งจัดเป็นหันหลัง/ไม่ตั้งใจง่ายขึ้น
+- `CFRS_BODY_MATCH_IOU_MIN=0.04` เกณฑ์ iou ขั้นต่ำในการแมตช์ body กับ track เดิม เพื่อลดการจับซ้ำซ้อน
+- `CFRS_BODY_FALLBACK_MAX_FRAMES=20` จำกัดจำนวนเฟรมที่อนุญาตให้ body fallback สืบทอด track เดิม
+- `CFRS_BODY_MOTION_ALPHA=0.34` ค่าการ smooth การเคลื่อนไหว (motion EMA) ของ body tracking
+- `CFRS_BODY_MOTION_INATTENTIVE_THRESH=34` เกณฑ์ motion สูงที่ตีความเป็นไม่ตั้งใจ
+- `CFRS_BODY_MOTION_STILL_THRESH=6` เกณฑ์ motion ต่ำที่ช่วยคงสถานะง่วง/หลับ
+- `CFRS_FACE_TRACK_MAX_DISTANCE=60` ระยะแมตช์ใบหน้ากับ track เดิม (pixel)
+- `CFRS_FAR_FACE_MIN_WIDTH_PX=22` นิยามใบหน้าระยะไกล (กรอบหน้าเล็ก)
+- `CFRS_FAR_FACE_CONF_DELTA=16` ผ่อน threshold ความมั่นใจสำหรับใบหน้าระยะไกล
+- `CFRS_FAR_FACE_BOOST_NO_FACE_FRAMES=8` เมื่อไม่เจอหน้าต่อเนื่องครบเฟรมนี้ จะ boost โหมดจับระยะไกล
+- `CFRS_FAR_FACE_BOOST_SCALE=0.65` scale ที่ใช้ตอน boost จับใบหน้าระยะไกล
+- `CFRS_BODY_NO_FACE_RESIZE_SCALE=0.58` สเกล body detector ตอนที่ไม่เจอหน้าที่เชื่อถือได้
+- `CFRS_BODY_MIN_WIDTH_NO_FACE_PX=44` / `CFRS_BODY_MIN_HEIGHT_NO_FACE_PX=96` ลดขั้นต่ำกรอบตัวในโหมด no-face
+- `CFRS_BODY_FACE_OVERLAP_SKIP_IOU=0.35` ข้าม body box เมื่อทับกับหน้าที่เชื่อถือได้มากเกินไป
+- `CFRS_BODY_FACE_OVERLAP_SOFT_IOU=0.18` ยอมให้ body fallback ทำงานแม้ทับกับกรอบหน้า Unknown เล็กน้อย
 - `CFRS_POST_TIMEOUT_SEC=1.2` timeout ส่ง payload ต่อครั้ง
 - `CFRS_POST_QUEUE_SIZE=4` ขนาดคิว payload แบบ async
 - `CFRS_STUDENT_DIR_REFRESH_SEC=20` ความถี่รีเฟรช mapping นักศึกษาจากฐานข้อมูล
@@ -261,6 +280,14 @@ python run_dashboard.py
 | ปรับเกณฑ์หันหลัง | `CFRS_BODY_SLOUCH_RATIO` | เพิ่มค่าเพื่อตีความ inattentive ง่ายขึ้น |
 | ลด face detect ตอนคนหาย | `CFRS_FACE_DETECTION_COOLDOWN_FRAMES` | เพิ่มค่าเพื่อลดภาระเมื่อไม่มีใบหน้า |
 | body trigger หลังหน้าหาย | `CFRS_FACE_MISSING_BODY_GRACE_FRAMES` | ยิ่งน้อย ยิ่ง trigger body เร็ว |
+| ลดจับซ้ำ body-track | `CFRS_BODY_MATCH_IOU_MIN` | เพิ่มค่าเล็กน้อยเพื่อลดการจับ track ผิดคน |
+| จำกัดการสืบทอดจาก body | `CFRS_BODY_FALLBACK_MAX_FRAMES` | ลดค่าเพื่อลดการลาก track ที่หายหน้าไปนาน |
+| ปรับความไว movement | `CFRS_BODY_MOTION_INATTENTIVE_THRESH` | ลดค่า = ตีความไม่ตั้งใจเร็วขึ้น |
+| ช่วยจับคนไกลขึ้น | `CFRS_FAR_FACE_BOOST_SCALE` | เพิ่มค่าเพื่อให้ detect scale ใหญ่ขึ้นเมื่อไม่เจอหน้า |
+| ผ่อน threshold ตอนคนไกล | `CFRS_FAR_FACE_CONF_DELTA` | เพิ่มค่าเล็กน้อยเพื่อรับใบหน้าที่เล็กลง |
+| ช่วยจับ body ตอนมือบังหน้า | `CFRS_BODY_NO_FACE_RESIZE_SCALE` | เพิ่มค่าเป็น 0.62-0.72 เพื่อไวขึ้น |
+| เพิ่มโอกาส body fallback | `CFRS_BODY_MIN_WIDTH_NO_FACE_PX` | ลดค่าเล็กน้อย (เช่น 40-44) |
+| ปรับการข้ามกรอบที่ทับหน้า | `CFRS_BODY_FACE_OVERLAP_SOFT_IOU` | เพิ่มได้เล็กน้อยถ้ายัง skip เร็วเกิน |
 | ลดหน่วงหน้าต่างแสดงผล | `CFRS_PREVIEW_DOWNSCALE` | ลดขนาด preview ให้ render เร็วขึ้น |
 
 ค่าตั้งต้นที่ใช้อยู่ในสคริปต์
@@ -304,6 +331,8 @@ py -3 -c "import flask, requests, cv2, face_recognition"
 ถ้ายังไม่ครบให้ติดตั้ง
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 

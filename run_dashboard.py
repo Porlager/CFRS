@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import importlib.util
 import json
 import os
 import socket
@@ -13,6 +12,18 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parent
+
+
+def _discover_project_python() -> str | None:
+    candidates = [
+        ROOT_DIR / ".venv" / "bin" / "python",
+        ROOT_DIR / ".venv" / "Scripts" / "python.exe",
+        ROOT_DIR / ".venv310uv" / "Scripts" / "python.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 def _parse_bounded_int(value: str, default: int, min_value: int, max_value: int) -> int:
@@ -79,12 +90,43 @@ def _terminate_process(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
 
 
-def _check_required_modules(modules: list[str]) -> list[str]:
-    missing = []
-    for module_name in modules:
-        if importlib.util.find_spec(module_name) is None:
-            missing.append(module_name)
-    return missing
+def _check_required_modules(python_bin: str, modules: list[str]) -> list[str]:
+    code = (
+        "import importlib.util, json, sys\n"
+        "mods = json.loads(sys.argv[1])\n"
+        "missing = [m for m in mods if importlib.util.find_spec(m) is None]\n"
+        "print('\\n'.join(missing))\n"
+    )
+    try:
+        proc = subprocess.run(
+            [python_bin, "-c", code, json.dumps(modules)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return list(modules)
+
+    if proc.returncode != 0:
+        return list(modules)
+
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _resolve_python_runtime(required_modules: list[str]) -> tuple[str, list[str], bool]:
+    current_python = sys.executable
+    missing_current = _check_required_modules(current_python, required_modules)
+    if not missing_current:
+        return current_python, [], False
+
+    project_python = _discover_project_python()
+    if project_python:
+        missing_project = _check_required_modules(project_python, required_modules)
+        if not missing_project:
+            return project_python, [], True
+        return project_python, missing_project, False
+
+    return current_python, missing_current, False
 
 
 def main() -> int:
@@ -116,13 +158,24 @@ def main() -> int:
     args = parser.parse_args()
 
     required = ["flask", "requests"] if args.dashboard_only else ["flask", "requests", "cv2", "face_recognition"]
-    missing_modules = _check_required_modules(required)
+    python_bin, missing_modules, used_project_runtime = _resolve_python_runtime(required)
+    if used_project_runtime:
+        print(f"[CFRS] INFO: Using project virtualenv interpreter: {python_bin}")
+
     if missing_modules:
         print(
             "[CFRS] Missing dependencies: "
             + ", ".join(missing_modules)
-            + f"\n[CFRS] Install with: {sys.executable} -m pip install -r requirements.txt"
+            + f"\n[CFRS] Install with: {python_bin} -m pip install -r requirements.txt"
         )
+        if _discover_project_python() is None:
+            print(
+                "[CFRS] Tip: Homebrew Python may block global pip installs (PEP 668).\n"
+                "[CFRS] Create venv first:\n"
+                "  python3 -m venv .venv\n"
+                "  source .venv/bin/activate\n"
+                "  python -m pip install -r requirements.txt"
+            )
         return 1
 
     try:
@@ -144,7 +197,7 @@ def main() -> int:
     print(f"[CFRS] Register URL: {dashboard_url}/register")
 
     dashboard_proc = subprocess.Popen(
-        [sys.executable, "dashboard_api.py"],
+        [python_bin, "dashboard_api.py"],
         cwd=str(ROOT_DIR),
         env=env_dashboard,
     )
@@ -181,7 +234,7 @@ def main() -> int:
     print("[CFRS] Starting camera backend (press 'q' on camera window to stop).")
     try:
         backend_exit = subprocess.run(
-            [sys.executable, "main.py"],
+            [python_bin, "main.py"],
             cwd=str(ROOT_DIR),
             env=env_camera,
             check=False,

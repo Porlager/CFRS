@@ -13,9 +13,147 @@ from collections import deque
 from datetime import datetime
 from queue import Empty, Full, Queue
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+
 
 REGISTER_FACE_SUFFIX_PATTERN = re.compile(r"_\d{8}_\d{6}_\d{6}$")
 UNKNOWN_FACE_NAMES = {"Unknown", "Moving/Blur", ""}
+
+_UNICODE_FONT_CACHE = {}
+_UNICODE_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/tahoma.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "/System/Library/Fonts/Supplemental/Thonburi.ttf",
+    "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+)
+
+
+def _contains_non_ascii(text: str) -> bool:
+    return any(ord(ch) > 127 for ch in str(text or ""))
+
+
+def _get_unicode_font(font_size: int):
+    if ImageFont is None:
+        return None
+
+    size = max(12, int(font_size))
+    cached = _UNICODE_FONT_CACHE.get(size)
+    if cached is not None:
+        return cached
+
+    for font_path in _UNICODE_FONT_CANDIDATES:
+        if not os.path.exists(font_path):
+            continue
+        try:
+            font = ImageFont.truetype(font_path, size)
+            _UNICODE_FONT_CACHE[size] = font
+            return font
+        except OSError:
+            continue
+
+    fallback = ImageFont.load_default()
+    _UNICODE_FONT_CACHE[size] = fallback
+    return fallback
+
+
+def _queue_overlay_text(text_overlays: list, text: str, origin, color, font_scale: float = 0.6, thickness: int = 2) -> None:
+    if text is None:
+        return
+    text_overlays.append(
+        {
+            "text": str(text),
+            "origin": (int(origin[0]), int(origin[1])),
+            "color": tuple(color),
+            "font_scale": float(font_scale),
+            "thickness": int(thickness),
+        }
+    )
+
+
+def _flush_overlay_texts(frame, text_overlays: list) -> None:
+    if not text_overlays:
+        return
+
+    unicode_jobs = []
+    for job in text_overlays:
+        text = job["text"]
+        if not text:
+            continue
+        if _contains_non_ascii(text):
+            unicode_jobs.append(job)
+            continue
+        cv2.putText(
+            frame,
+            text,
+            job["origin"],
+            cv2.FONT_HERSHEY_SIMPLEX,
+            job["font_scale"],
+            job["color"],
+            job["thickness"],
+        )
+
+    if not unicode_jobs:
+        return
+
+    if Image is None or ImageDraw is None or ImageFont is None:
+        for job in unicode_jobs:
+            cv2.putText(
+                frame,
+                job["text"],
+                job["origin"],
+                cv2.FONT_HERSHEY_SIMPLEX,
+                job["font_scale"],
+                job["color"],
+                job["thickness"],
+            )
+        return
+
+    pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_image)
+
+    for job in unicode_jobs:
+        text = job["text"]
+        font = _get_unicode_font(max(14, int(26 * job["font_scale"])))
+        if font is None:
+            cv2.putText(
+                frame,
+                text,
+                job["origin"],
+                cv2.FONT_HERSHEY_SIMPLEX,
+                job["font_scale"],
+                job["color"],
+                job["thickness"],
+            )
+            continue
+
+        stroke_width = 1 if int(job["thickness"]) >= 2 else 0
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+            text_height = max(1, int(bbox[3] - bbox[1]))
+        except AttributeError:
+            _, text_height = draw.textsize(text, font=font)
+
+        x, y = job["origin"]
+        top = max(0, y - text_height)
+        color = job["color"]
+        draw.text(
+            (x, top),
+            text,
+            font=font,
+            fill=(int(color[2]), int(color[1]), int(color[0])),
+            stroke_width=stroke_width,
+            stroke_fill=(0, 0, 0),
+        )
+
+    frame[:] = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 
 def _normalize_space(text: str) -> str:
@@ -74,8 +212,8 @@ def _smooth_track_state(track_data, observed_state: str, window_size: int) -> st
         history.append(observed_state)
 
     if not history:
-        track_data["last_state"] = "ไม่ทราบสถานะ"
-        return "ไม่ทราบสถานะ"
+        track_data["last_state"] = "Null Status"
+        return "Null Status"
 
     vote_weights = {}
     for idx, state in enumerate(history):
@@ -88,7 +226,15 @@ def _smooth_track_state(track_data, observed_state: str, window_size: int) -> st
     return stable_state
 
 
-def _classify_body_posture_state(body_bb, lying_ratio: float, slouch_ratio: float, previous_state: str) -> str:
+def _classify_body_posture_state(
+    body_bb,
+    lying_ratio: float,
+    slouch_ratio: float,
+    previous_state: str,
+    motion_ema: float = 0.0,
+    motion_inattentive_threshold: float = 34.0,
+    motion_still_threshold: float = 6.0,
+) -> str:
     width = max(1, int(body_bb["Right"]) - int(body_bb["Left"]))
     height = max(1, int(body_bb["Bottom"]) - int(body_bb["Top"]))
     ratio = float(height) / float(width)
@@ -98,9 +244,14 @@ def _classify_body_posture_state(body_bb, lying_ratio: float, slouch_ratio: floa
     if ratio <= slouch_ratio:
         return "หันหลัง/ไม่ตั้งใจ"
 
+    if motion_ema >= motion_inattentive_threshold:
+        return "ไม่ตั้งใจเรียน"
+    if motion_ema <= motion_still_threshold and classify_state_bucket(previous_state) == "drowsy":
+        return previous_state
+
     if classify_state_bucket(previous_state) in {"drowsy", "inattentive"}:
         return previous_state
-    return "ไม่ทราบสถานะ"
+    return "Null Status"
 
 
 class StudentDirectory:
@@ -448,7 +599,7 @@ class ClassroomFacialRecognitionService:
 
     def _classify_attention_state(self, face_landmarks, pose_penalty=0.0):
         if not face_landmarks:
-            return "ไม่ทราบสถานะ"
+            return "Null Status"
 
         if pose_penalty >= self.POSE_INATTENTIVE_PENALTY:
             return "ไม่ตั้งใจเรียน"
@@ -456,14 +607,20 @@ class ClassroomFacialRecognitionService:
         left_eye = face_landmarks.get("left_eye")
         right_eye = face_landmarks.get("right_eye")
         if not left_eye or not right_eye:
-            return "ไม่ทราบสถานะ"
+            return "Null Status"
 
         left_ear = self._eye_aspect_ratio(left_eye)
         right_ear = self._eye_aspect_ratio(right_eye)
         avg_ear = (left_ear + right_ear) / 2.0
         return "หลับ/เหม่อ" if avg_ear < self.EAR_THRESH else "ตั้งใจเรียน"
 
-    def process_frame(self, frame, resize_scale=1):
+    def process_frame(
+        self,
+        frame,
+        resize_scale=1,
+        far_face_min_width_px: int = 22,
+        far_face_required_conf_delta: float = 16.0,
+    ):
         small_frame = cv2.resize(frame, (0, 0), fx=resize_scale, fy=resize_scale)
         rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
@@ -493,7 +650,7 @@ class ClassroomFacialRecognitionService:
                         "Name": "Moving/Blur",
                         "Confidence": 0.0,
                         "BoundingBox": bbox,
-                        "State": "ไม่ทราบสถานะ",
+                        "State": "Null Status",
                     }
                 )
                 continue
@@ -520,6 +677,12 @@ class ClassroomFacialRecognitionService:
 
                 if best_dist <= threshold and actual_margin > required_margin and conf >= self.MIN_CONFIDENCE:
                     name = best_match_name
+                elif face_width <= max(8, int(far_face_min_width_px)):
+                    far_conf_min = max(45.0, self.MIN_CONFIDENCE - float(far_face_required_conf_delta))
+                    far_margin = max(0.015, required_margin * 0.38)
+                    far_threshold = min(0.67, threshold + 0.06)
+                    if best_dist <= far_threshold and actual_margin >= far_margin and conf >= far_conf_min:
+                        name = best_match_name
                 else:
                     name = "Unknown"
 
@@ -534,15 +697,25 @@ class ClassroomFacialRecognitionService:
 
         return detections
 
-    def detect_bodies(self, frame, resize_scale=0.45):
+    def detect_bodies(
+        self,
+        frame,
+        resize_scale=0.45,
+        min_body_width: int = 60,
+        min_body_height: int = 120,
+        hog_scale: float = 1.05,
+    ):
         scale = max(0.25, min(1.0, resize_scale))
         small_frame = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
+        min_body_width = max(30, int(min_body_width))
+        min_body_height = max(60, int(min_body_height))
+        hog_scale = max(1.01, min(1.20, float(hog_scale)))
 
         rects, _ = self.body_detector.detectMultiScale(
             small_frame,
             winStride=(8, 8),
             padding=(8, 8),
-            scale=1.05,
+            scale=hog_scale,
         )
 
         detections = []
@@ -552,7 +725,7 @@ class ClassroomFacialRecognitionService:
             y1 = int(y * scale_back)
             x2 = int((x + w) * scale_back)
             y2 = int((y + h) * scale_back)
-            if (x2 - x1) < 60 or (y2 - y1) < 120:
+            if (x2 - x1) < min_body_width or (y2 - y1) < min_body_height:
                 continue
             detections.append({"Top": y1, "Right": x2, "Bottom": y2, "Left": x1})
         return detections
@@ -589,6 +762,22 @@ def bbox_iou(a, b):
     if denom <= 1e-6:
         return 0.0
     return inter_area / denom
+
+
+def _update_motion_ema(track_data, new_centroid, alpha: float) -> float:
+    alpha = max(0.05, min(0.9, float(alpha)))
+    prev_centroid = track_data.get("centroid")
+    if prev_centroid is None:
+        track_data["centroid"] = new_centroid
+        track_data["motion_ema"] = 0.0
+        return 0.0
+
+    motion = math.hypot(new_centroid[0] - prev_centroid[0], new_centroid[1] - prev_centroid[1])
+    prev_ema = float(track_data.get("motion_ema", 0.0))
+    motion_ema = motion if prev_ema <= 0 else ((1.0 - alpha) * prev_ema + alpha * motion)
+    track_data["motion_ema"] = motion_ema
+    track_data["centroid"] = new_centroid
+    return motion_ema
 
 
 def _open_camera_by_index(camera_index: int):
@@ -724,7 +913,43 @@ if __name__ == "__main__":
     body_detect_every_n_frames = max(1, min(16, body_detect_every_n_frames))
     body_resize_scale = float(os.getenv("CFRS_BODY_RESIZE_SCALE", "0.45"))
     body_resize_scale = max(0.25, min(0.8, body_resize_scale))
+    body_no_face_resize_scale = float(os.getenv("CFRS_BODY_NO_FACE_RESIZE_SCALE", "0.58"))
+    body_no_face_resize_scale = max(body_resize_scale, min(0.9, body_no_face_resize_scale))
+    body_min_width_px = int(os.getenv("CFRS_BODY_MIN_WIDTH_PX", "60"))
+    body_min_width_px = max(30, min(180, body_min_width_px))
+    body_min_height_px = int(os.getenv("CFRS_BODY_MIN_HEIGHT_PX", "120"))
+    body_min_height_px = max(60, min(260, body_min_height_px))
+    body_min_width_no_face_px = int(os.getenv("CFRS_BODY_MIN_WIDTH_NO_FACE_PX", "44"))
+    body_min_width_no_face_px = max(24, min(body_min_width_px, 160))
+    body_min_height_no_face_px = int(os.getenv("CFRS_BODY_MIN_HEIGHT_NO_FACE_PX", "96"))
+    body_min_height_no_face_px = max(48, min(body_min_height_px, 220))
+    body_overlap_skip_iou = float(os.getenv("CFRS_BODY_FACE_OVERLAP_SKIP_IOU", "0.35"))
+    body_overlap_skip_iou = max(0.12, min(0.85, body_overlap_skip_iou))
+    body_overlap_soft_iou = float(os.getenv("CFRS_BODY_FACE_OVERLAP_SOFT_IOU", "0.18"))
+    body_overlap_soft_iou = max(0.05, min(body_overlap_skip_iou, body_overlap_soft_iou))
+    body_hog_scale = float(os.getenv("CFRS_BODY_HOG_SCALE", "1.05"))
+    body_hog_scale = max(1.01, min(1.20, body_hog_scale))
+    body_hog_scale_no_face = float(os.getenv("CFRS_BODY_HOG_SCALE_NO_FACE", "1.03"))
+    body_hog_scale_no_face = max(1.01, min(body_hog_scale, body_hog_scale_no_face))
     body_match_max_distance = int(os.getenv("CFRS_BODY_MATCH_MAX_DISTANCE", "190"))
+    body_match_iou_min = float(os.getenv("CFRS_BODY_MATCH_IOU_MIN", "0.04"))
+    body_match_iou_min = max(0.0, min(0.6, body_match_iou_min))
+    body_motion_alpha = float(os.getenv("CFRS_BODY_MOTION_ALPHA", "0.34"))
+    body_motion_alpha = max(0.05, min(0.9, body_motion_alpha))
+    body_motion_inattentive_threshold = float(os.getenv("CFRS_BODY_MOTION_INATTENTIVE_THRESH", "34"))
+    body_motion_still_threshold = float(os.getenv("CFRS_BODY_MOTION_STILL_THRESH", "6"))
+    body_fallback_max_frames = int(os.getenv("CFRS_BODY_FALLBACK_MAX_FRAMES", "20"))
+    body_fallback_max_frames = max(4, min(80, body_fallback_max_frames))
+    far_face_min_width_px = int(os.getenv("CFRS_FAR_FACE_MIN_WIDTH_PX", "22"))
+    far_face_min_width_px = max(8, min(80, far_face_min_width_px))
+    far_face_required_conf_delta = float(os.getenv("CFRS_FAR_FACE_CONF_DELTA", "16"))
+    far_face_required_conf_delta = max(0.0, min(40.0, far_face_required_conf_delta))
+    far_face_boost_no_face_frames = int(os.getenv("CFRS_FAR_FACE_BOOST_NO_FACE_FRAMES", "8"))
+    far_face_boost_no_face_frames = max(2, min(40, far_face_boost_no_face_frames))
+    far_face_boost_scale = float(os.getenv("CFRS_FAR_FACE_BOOST_SCALE", "0.65"))
+    far_face_boost_scale = max(0.35, min(1.0, far_face_boost_scale))
+    face_max_distance = int(os.getenv("CFRS_FACE_TRACK_MAX_DISTANCE", "60"))
+    face_max_distance = max(25, min(200, face_max_distance))
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
@@ -779,8 +1004,9 @@ if __name__ == "__main__":
 
     CONFIRMATION_TIME = 5.0
     TIMEOUT = 10.0
-    MAX_DISTANCE = 50
+    MAX_DISTANCE = face_max_distance
     empty_reads = 0
+    no_face_streak = 0
 
     try:
         while True:
@@ -803,12 +1029,42 @@ if __name__ == "__main__":
                 heavy_interval = min(face_detection_cooldown_frames, process_every_n_frames + no_face_interval_boost_frames)
             should_run_heavy = (frame_index % heavy_interval == 1) or (not cached_results)
             if should_run_heavy:
-                cached_results = service.process_frame(frame, resize_scale=frame_resize_scale)
+                detect_scale = frame_resize_scale
+                if no_face_streak >= far_face_boost_no_face_frames:
+                    detect_scale = max(frame_resize_scale, far_face_boost_scale)
+                cached_results = service.process_frame(
+                    frame,
+                    resize_scale=detect_scale,
+                    far_face_min_width_px=far_face_min_width_px,
+                    far_face_required_conf_delta=far_face_required_conf_delta,
+                )
+                if cached_results:
+                    no_face_streak = 0
+                else:
+                    no_face_streak += 1
             results = cached_results
 
-            should_run_body = (len(results) == 0) or (frame_index % body_detect_every_n_frames == 1) or (not cached_body_boxes)
+            reliable_face_count = sum(1 for res in results if res.get("Name") not in UNKNOWN_FACE_NAMES)
+            has_tracking_targets = bool(tracked_faces)
+            should_run_body = (
+                (reliable_face_count == 0)
+                or has_tracking_targets
+                or (frame_index % body_detect_every_n_frames == 1)
+                or (not cached_body_boxes)
+            )
             if should_run_body:
-                cached_body_boxes = service.detect_bodies(frame, resize_scale=body_resize_scale)
+                no_face_mode = reliable_face_count == 0
+                detect_body_scale = body_no_face_resize_scale if no_face_mode else body_resize_scale
+                detect_body_min_w = body_min_width_no_face_px if no_face_mode else body_min_width_px
+                detect_body_min_h = body_min_height_no_face_px if no_face_mode else body_min_height_px
+                detect_body_hog_scale = body_hog_scale_no_face if no_face_mode else body_hog_scale
+                cached_body_boxes = service.detect_bodies(
+                    frame,
+                    resize_scale=detect_body_scale,
+                    min_body_width=detect_body_min_w,
+                    min_body_height=detect_body_min_h,
+                    hog_scale=detect_body_hog_scale,
+                )
             body_boxes = cached_body_boxes
 
             payload_students = []
@@ -818,6 +1074,9 @@ if __name__ == "__main__":
             unknown_count = 0
             seen_track_ids = set()
             face_boxes = []
+            text_overlays = []
+            emitted_track_ids = set()
+            payload_index_by_track = {}
             with tracker_lock:
                 keys_to_delete = [k for k, v in tracked_faces.items() if current_time - v["last_seen"] > TIMEOUT]
                 for k in keys_to_delete:
@@ -827,9 +1086,10 @@ if __name__ == "__main__":
                     bb = res["BoundingBox"]
                     ai_name = res["Name"]
                     conf = res["Confidence"]
-                    behavior_state_raw = res.get("State", "ไม่ทราบสถานะ")
+                    behavior_state_raw = res.get("State", "Null Status")
                     behavior_display = state_for_overlay(behavior_state_raw)
-                    face_boxes.append(bb)
+                    is_unknown_face = ai_name in UNKNOWN_FACE_NAMES
+                    face_boxes.append({"bbox": bb, "is_unknown": is_unknown_face})
                     
                     cx = (bb["Left"] + bb["Right"]) // 2
                     cy = (bb["Top"] + bb["Bottom"]) // 2
@@ -857,27 +1117,38 @@ if __name__ == "__main__":
                                 profile.get("display_name", ai_name),
                                 student_code=profile.get("student_code"),
                             )
+                            initial_confirmed = False
+                            if conf >= max(92.0, service.MIN_CONFIDENCE + 8.0):
+                                initial_confirmed = True
                             payload_track_id = next_track_id
                             tracked_faces[next_track_id] = {
                                 "identity_key": ai_name,
                                 "name": profile_name,
                                 "student_code": profile_code,
                                 "centroid": (cx, cy),
+                                "face_bbox": dict(bb),
+                                "motion_ema": 0.0,
+                                "body_fallback_frames": 0,
                                 "first_seen": current_time,
                                 "last_seen": current_time,
-                                "confirmed": False,
+                                "confirmed": initial_confirmed,
                                 "state_history": deque(maxlen=state_smoothing_window),
-                                "last_state": "ไม่ทราบสถานะ",
+                                "last_state": "Null Status",
                             }
                             display_name = profile_name
                             display_student_code = profile_code
                             is_tracking = True
+                            if initial_confirmed:
+                                is_confirmed = True
+                                elapsed_time = CONFIRMATION_TIME
                             next_track_id += 1
                     else:
                         payload_track_id = best_match_id
                         t_data = tracked_faces[best_match_id]
-                        t_data["centroid"] = (cx, cy)
+                        _update_motion_ema(t_data, (cx, cy), alpha=body_motion_alpha)
+                        t_data["face_bbox"] = dict(bb)
                         t_data["last_seen"] = current_time
+                        t_data["body_fallback_frames"] = 0
                         if ai_name not in UNKNOWN_FACE_NAMES:
                             profile = service.get_identity_profile(ai_name)
                             profile_name, profile_code = student_directory.resolve_identity(
@@ -933,22 +1204,32 @@ if __name__ == "__main__":
                             countdown = max(0, CONFIRMATION_TIME - elapsed_time)
                             text = f"กำลังยืนยัน {student_label}{display_name} ({behavior_display}) {countdown:.1f}s"
 
-                    payload_state = stable_state if display_name != "Moving/Blur" else "ไม่ทราบสถานะ"
+                    payload_state = stable_state if display_name != "Moving/Blur" else "Null Status"
                     payload_name = display_name if display_name else "Unknown"
-                    payload_students.append(
-                        {
-                            "track_id": payload_track_id,
-                            "name": payload_name,
-                            "student_code": display_student_code,
-                            "identity_key": tracked_faces[payload_track_id].get("identity_key") if payload_track_id in tracked_faces else None,
-                            "state": payload_state,
-                            "confirmed": bool(is_confirmed),
-                            "confidence": float(conf),
-                        }
+                    should_emit_face_payload = (
+                        payload_track_id is None or payload_track_id not in emitted_track_ids
                     )
+                    if should_emit_face_payload:
+                        payload_students.append(
+                            {
+                                "track_id": payload_track_id,
+                                "name": payload_name,
+                                "student_code": display_student_code,
+                                "identity_key": tracked_faces[payload_track_id].get("identity_key") if payload_track_id in tracked_faces else None,
+                                "state": payload_state,
+                                "confirmed": bool(is_confirmed),
+                                "confidence": float(conf),
+                            }
+                        )
+                        if payload_track_id is not None:
+                            payload_index_by_track[payload_track_id] = len(payload_students) - 1
+                        if payload_track_id is not None:
+                            emitted_track_ids.add(payload_track_id)
                     if payload_track_id is not None:
-                        seen_track_ids.add(payload_track_id)
-                        tracked_faces[payload_track_id]["face_missing_frames"] = 0
+                        if not is_unknown_face:
+                            seen_track_ids.add(payload_track_id)
+                            tracked_faces[payload_track_id]["face_missing_frames"] = 0
+                            tracked_faces[payload_track_id]["body_fallback_frames"] = 0
 
                     state_bucket = classify_state_bucket(payload_state)
                     if state_bucket == "drowsy":
@@ -961,25 +1242,50 @@ if __name__ == "__main__":
                         unknown_count += 1
 
                     cv2.rectangle(frame, (bb["Left"], bb["Top"]), (bb["Right"], bb["Bottom"]), color, 2)
-                    cv2.putText(frame, text, (bb["Left"], bb["Top"] - 10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    _queue_overlay_text(text_overlays, text, (bb["Left"], bb["Top"] - 10), color, font_scale=0.6, thickness=2)
 
                 # Body fallback: continue tracking and behavior when face temporarily disappears.
                 for body_bb in body_boxes:
-                    overlap_with_face = any(bbox_iou(body_bb, fb) > 0.22 for fb in face_boxes)
-                    if overlap_with_face:
+                    max_overlap_known = 0.0
+                    max_overlap_unknown = 0.0
+                    for fb in face_boxes:
+                        overlap = bbox_iou(body_bb, fb["bbox"])
+                        if fb["is_unknown"]:
+                            if overlap > max_overlap_unknown:
+                                max_overlap_unknown = overlap
+                        elif overlap > max_overlap_known:
+                            max_overlap_known = overlap
+
+                    if max_overlap_known >= body_overlap_skip_iou:
+                        continue
+
+                    has_missing_track_ready = any(
+                        int(t_data.get("face_missing_frames", 0)) >= face_missing_body_grace_frames
+                        for t_data in tracked_faces.values()
+                    )
+                    if max_overlap_unknown >= body_overlap_soft_iou and not has_missing_track_ready:
+                        continue
+                    if max_overlap_unknown >= body_overlap_skip_iou and not has_tracking_targets:
                         continue
 
                     body_cx, body_cy = bbox_center(body_bb)
                     best_track_id = None
                     best_dist = float("inf")
+                    best_iou = -1.0
 
                     for t_id, t_data in tracked_faces.items():
                         if t_id in seen_track_ids:
                             continue
                         dist = math.hypot(body_cx - t_data["centroid"][0], body_cy - t_data["centroid"][1])
-                        if dist < best_dist and dist <= body_match_max_distance:
+                        prev_face_bb = t_data.get("face_bbox")
+                        iou_score = bbox_iou(body_bb, prev_face_bb) if prev_face_bb else 0.0
+                        if dist > body_match_max_distance:
+                            continue
+                        if iou_score < body_match_iou_min and dist >= best_dist:
+                            continue
+                        if (iou_score > best_iou) or (abs(iou_score - best_iou) <= 1e-6 and dist < best_dist):
                             best_dist = dist
+                            best_iou = iou_score
                             best_track_id = t_id
 
                     if best_track_id is None:
@@ -988,9 +1294,15 @@ if __name__ == "__main__":
                     t_data = tracked_faces[best_track_id]
                     missing_frames = int(t_data.get("face_missing_frames", 0)) + 1
                     t_data["face_missing_frames"] = missing_frames
+                    fallback_frames = int(t_data.get("body_fallback_frames", 0)) + 1
+                    t_data["body_fallback_frames"] = fallback_frames
                     if missing_frames < face_missing_body_grace_frames:
                         continue
+                    if fallback_frames > body_fallback_max_frames:
+                        continue
+                    motion_ema = _update_motion_ema(t_data, (body_cx, body_cy), alpha=body_motion_alpha)
                     t_data["centroid"] = (body_cx, body_cy)
+                    t_data["face_bbox"] = dict(body_bb)
                     t_data["last_seen"] = current_time
                     seen_track_ids.add(best_track_id)
 
@@ -1003,21 +1315,34 @@ if __name__ == "__main__":
                         body_bb,
                         lying_ratio=body_lying_ratio,
                         slouch_ratio=body_slouch_ratio,
-                        previous_state=t_data.get("last_state", "ไม่ทราบสถานะ"),
+                        previous_state=t_data.get("last_state", "Null Status"),
+                        motion_ema=motion_ema,
+                        motion_inattentive_threshold=body_motion_inattentive_threshold,
+                        motion_still_threshold=body_motion_still_threshold,
                     )
                     stable_body_state = _smooth_track_state(t_data, body_state, state_smoothing_window)
 
-                    payload_students.append(
-                        {
-                            "track_id": best_track_id,
-                            "name": inherited_name,
-                            "student_code": inherited_code,
-                            "identity_key": t_data.get("identity_key"),
-                            "state": stable_body_state,
-                            "confirmed": False,
-                            "confidence": 0.0,
-                        }
-                    )
+                    existing_payload_idx = payload_index_by_track.get(best_track_id)
+                    if existing_payload_idx is not None:
+                        payload_item = payload_students[existing_payload_idx]
+                        payload_item["name"] = inherited_name
+                        payload_item["student_code"] = inherited_code
+                        payload_item["state"] = stable_body_state
+                        payload_item["confirmed"] = bool(t_data.get("confirmed", False))
+                    elif best_track_id not in emitted_track_ids:
+                        payload_students.append(
+                            {
+                                "track_id": best_track_id,
+                                "name": inherited_name,
+                                "student_code": inherited_code,
+                                "identity_key": t_data.get("identity_key"),
+                                "state": stable_body_state,
+                                "confirmed": bool(t_data.get("confirmed", False)),
+                                "confidence": 0.0,
+                            }
+                        )
+                        payload_index_by_track[best_track_id] = len(payload_students) - 1
+                        emitted_track_ids.add(best_track_id)
                     body_bucket = classify_state_bucket(stable_body_state)
                     if body_bucket == "drowsy":
                         drowsy_count += 1
@@ -1034,7 +1359,30 @@ if __name__ == "__main__":
                     body_color = (255, 160, 0) if body_bucket in {"drowsy", "inattentive"} else (180, 180, 180)
                     body_text = f"{body_code_label}{body_text_name} ({body_state_overlay})"
                     cv2.rectangle(frame, (body_bb["Left"], body_bb["Top"]), (body_bb["Right"], body_bb["Bottom"]), body_color, 2)
-                    cv2.putText(frame, body_text, (body_bb["Left"], max(18, body_bb["Top"] - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.58, body_color, 2)
+                    _queue_overlay_text(
+                        text_overlays,
+                        body_text,
+                        (body_bb["Left"], max(18, body_bb["Top"] - 10)),
+                        body_color,
+                        font_scale=0.58,
+                        thickness=2,
+                    )
+
+            _flush_overlay_texts(frame, text_overlays)
+            drowsy_count = 0
+            attentive_count = 0
+            inattentive_count = 0
+            unknown_count = 0
+            for payload_student in payload_students:
+                state_bucket = classify_state_bucket(payload_student.get("state"))
+                if state_bucket == "drowsy":
+                    drowsy_count += 1
+                elif state_bucket == "attentive":
+                    attentive_count += 1
+                elif state_bucket == "inattentive":
+                    inattentive_count += 1
+                else:
+                    unknown_count += 1
 
             now = time.time()
             dt = max(1e-6, now - last_fps_time)

@@ -184,7 +184,7 @@
           const confidenceText = s.confidence == null ? "-" : `${Number(s.confidence).toFixed(1)}%`;
           const trackLabel = s.track_id == null ? "รหัสติดตาม:-" : `รหัสติดตาม:${s.track_id}`;
           const studentLabel = s.student_code ? `รหัสนศ.:${escapeHtml(s.student_code)}` : "รหัสนศ.:-";
-          const verifyLabel = s.confirmed ? "ยืนยันแล้ว" : "กำลังติดตาม";
+          const verifyLabel = s.confirmed ? "confirm" : "following";
           const thState = translateState(s.state);
           
           return `
